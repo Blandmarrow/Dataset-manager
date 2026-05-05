@@ -1,0 +1,15 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+dataset_manager.db
+data/
+models_cache/
+frontend/dist/
+frontend/node_modules/
+.DS_Store
+Thumbs.db
+*.egg-info/
+.pytest_cache/
+alembic/__pycache__/

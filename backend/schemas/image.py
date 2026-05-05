@@ -1,0 +1,74 @@
+from datetime import datetime
+from typing import Any
+from pydantic import BaseModel
+
+
+class ImageOut(BaseModel):
+    id: str
+    dataset_id: str
+    filename: str
+    original_filename: str
+    width: int | None
+    height: int | None
+    file_size_bytes: int | None
+    format: str | None
+    phash: str | None
+    created_at: datetime
+    aesthetic_score: float | None
+    blur_score: float | None
+    noise_score: float | None
+    quality_flags: dict[str, Any]
+    caption_text: str
+    caption_style: str
+    captioned_by: str
+    captioned_at: datetime | None
+    tags_json: list[str]
+
+    model_config = {"from_attributes": True}
+
+
+class ImageListItem(BaseModel):
+    id: str
+    dataset_id: str
+    filename: str
+    width: int | None
+    height: int | None
+    file_size_bytes: int | None
+    format: str | None
+    aesthetic_score: float | None
+    blur_score: float | None
+    quality_flags: dict[str, Any]
+    caption_text: str
+    tags_json: list[str]
+    captioned_by: str
+
+    model_config = {"from_attributes": True}
+
+
+class ImageResizeRequest(BaseModel):
+    width: int | None = None
+    height: int | None = None
+    scale: float | None = None
+    maintain_ar: bool = True
+    resample: str = "LANCZOS"
+
+
+class ImageCropRequest(BaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
+
+
+class BatchResizeRequest(BaseModel):
+    image_ids: list[str]
+    width: int | None = None
+    height: int | None = None
+    scale: float | None = None
+    maintain_ar: bool = True
+
+
+class BatchCropRequest(BaseModel):
+    image_ids: list[str]
+    target_ar: float
+    strategy: str = "center"

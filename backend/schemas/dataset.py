@@ -1,0 +1,45 @@
+from datetime import datetime
+from pydantic import BaseModel, Field
+
+
+class DatasetCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=255)
+    description: str = ""
+
+
+class DatasetUpdate(BaseModel):
+    name: str | None = Field(None, min_length=1, max_length=255)
+    description: str | None = None
+
+
+class DatasetImport(BaseModel):
+    folder_path: str
+
+
+class DatasetOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    folder_path: str
+    created_at: datetime
+    updated_at: datetime
+    image_count: int
+    captioned_count: int
+    total_size_bytes: int
+
+    model_config = {"from_attributes": True}
+
+
+class DatasetStats(BaseModel):
+    id: str
+    name: str
+    image_count: int
+    captioned_count: int
+    caption_coverage_pct: float
+    total_size_bytes: int
+    total_size_mb: float
+    avg_width: float | None
+    avg_height: float | None
+    aspect_ratio_distribution: dict[str, int]
+    format_distribution: dict[str, int]
+    score_distribution: dict[str, int]

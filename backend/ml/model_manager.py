@@ -1,0 +1,180 @@
+import asyncio
+import logging
+import time
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+class ModelEntry:
+    def __init__(self, model: Any, processor: Any, vram_mb: int) -> None:
+        self.model = model
+        self.processor = processor
+        self.vram_mb = vram_mb
+        self.last_used = time.time()
+        self.in_use = False
+
+
+class ModelManager:
+    def __init__(self, max_vram_mb: int = 20000) -> None:
+        self._registry: dict[str, ModelEntry] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+        self._global_lock = asyncio.Lock()
+        self.max_vram_mb = max_vram_mb
+
+    def _get_lock(self, model_id: str) -> asyncio.Lock:
+        if model_id not in self._locks:
+            self._locks[model_id] = asyncio.Lock()
+        return self._locks[model_id]
+
+    def _used_vram(self) -> int:
+        return sum(e.vram_mb for e in self._registry.values())
+
+    def _evict_lru(self, needed_mb: int) -> None:
+        import torch
+        candidates = [
+            (mid, entry) for mid, entry in self._registry.items()
+            if not entry.in_use
+        ]
+        candidates.sort(key=lambda x: x[1].last_used)
+        for mid, entry in candidates:
+            if self._used_vram() + needed_mb <= self.max_vram_mb:
+                break
+            logger.info("Evicting model %s from VRAM", mid)
+            try:
+                entry.model.cpu()
+            except Exception:
+                pass
+            del entry.model
+            del entry.processor
+            del self._registry[mid]
+            torch.cuda.empty_cache()
+
+    async def get(self, model_id: str) -> ModelEntry:
+        if model_id in self._registry:
+            entry = self._registry[model_id]
+            entry.last_used = time.time()
+            return entry
+        raise KeyError(f"Model {model_id} not registered or loaded")
+
+    async def load_florence2(self, variant: str = "large") -> ModelEntry:
+        model_id = f"florence2_{variant}"
+        async with self._get_lock(model_id):
+            if model_id in self._registry:
+                return self._registry[model_id]
+
+            loop = asyncio.get_event_loop()
+            entry = await loop.run_in_executor(None, self._load_florence2_sync, model_id, variant)
+            self._registry[model_id] = entry
+            return entry
+
+    def _load_florence2_sync(self, model_id: str, variant: str) -> ModelEntry:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoProcessor
+
+        MODEL_MAP = {
+            "large": "microsoft/Florence-2-large",
+            "promptgen": "MiaoshouAI/Florence-2-large-PromptGen-v2.0",
+        }
+        model_name = MODEL_MAP.get(variant, MODEL_MAP["large"])
+        logger.info("Loading %s...", model_name)
+
+        self._evict_lru(5500)
+
+        processor = AutoProcessor.from_pretrained(model_name, trust_remote_code=True)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+        )
+        model = model.to("cuda")
+        model.eval()
+        return ModelEntry(model, processor, vram_mb=5500)
+
+    async def load_paligemma2(self) -> ModelEntry:
+        model_id = "paligemma2"
+        async with self._get_lock(model_id):
+            if model_id in self._registry:
+                return self._registry[model_id]
+
+            loop = asyncio.get_event_loop()
+            entry = await loop.run_in_executor(None, self._load_paligemma2_sync)
+            self._registry[model_id] = entry
+            return entry
+
+    def _load_paligemma2_sync(self) -> ModelEntry:
+        import torch
+        from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
+        from backend.config import settings
+
+        model_name = "google/paligemma2-3b-pt-448"
+        logger.info("Loading %s...", model_name)
+        self._evict_lru(6000)
+
+        kwargs = {"torch_dtype": torch.bfloat16, "device_map": "cuda"}
+        if settings.hf_token:
+            kwargs["token"] = settings.hf_token
+
+        processor = AutoProcessor.from_pretrained(model_name, **({} if not settings.hf_token else {"token": settings.hf_token}))
+        model = PaliGemmaForConditionalGeneration.from_pretrained(model_name, **kwargs)
+        model.eval()
+        return ModelEntry(model, processor, vram_mb=6000)
+
+    async def load_aesthetic(self) -> ModelEntry:
+        model_id = "aesthetic"
+        async with self._get_lock(model_id):
+            if model_id in self._registry:
+                return self._registry[model_id]
+            loop = asyncio.get_event_loop()
+            entry = await loop.run_in_executor(None, self._load_aesthetic_sync)
+            self._registry[model_id] = entry
+            return entry
+
+    def _load_aesthetic_sync(self) -> ModelEntry:
+        import torch
+        import open_clip
+        from backend.config import settings
+        from backend.ml.aesthetic_scorer import AestheticMLP, download_weights
+
+        logger.info("Loading aesthetic predictor...")
+        self._evict_lru(3500)
+
+        clip_model, _, preprocess = open_clip.create_model_and_transforms(
+            "ViT-L-14", pretrained="openai"
+        )
+        clip_model = clip_model.to("cuda").eval()
+
+        weights_path = settings.models_cache_dir / "aesthetic_predictor_v2_5.pth"
+        if not weights_path.exists():
+            download_weights(weights_path)
+
+        mlp = AestheticMLP(768)
+        mlp.load_state_dict(torch.load(weights_path, map_location="cpu"))
+        mlp = mlp.to("cuda").eval()
+
+        return ModelEntry({"clip": clip_model, "mlp": mlp, "preprocess": preprocess}, None, vram_mb=3500)
+
+    async def unload(self, model_id: str) -> None:
+        import torch
+        async with self._get_lock(model_id):
+            if model_id in self._registry:
+                entry = self._registry.pop(model_id)
+                try:
+                    entry.model.cpu()
+                except Exception:
+                    pass
+                del entry.model
+                torch.cuda.empty_cache()
+
+    def list_models(self) -> list[dict]:
+        loaded = set(self._registry.keys())
+        all_models = [
+            {"id": "florence2_large", "name": "Florence-2-large", "vram_mb": 5500},
+            {"id": "florence2_promptgen", "name": "Florence-2 PromptGen v2", "vram_mb": 5500},
+            {"id": "paligemma2", "name": "PaliGemma-2 3B", "vram_mb": 6000},
+            {"id": "aesthetic", "name": "LAION Aesthetic Predictor", "vram_mb": 3500},
+        ]
+        return [{**m, "loaded": m["id"] in loaded} for m in all_models]
+
+
+model_manager = ModelManager()

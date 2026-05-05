@@ -1,0 +1,16 @@
+import client from "./client";
+
+export const captioningApi = {
+  models: () =>
+    client.get<{ local_models: unknown[]; ollama_models: unknown[] }>("/captioning/models").then((r) => r.data),
+  styles: () => client.get("/captioning/styles").then((r) => r.data),
+  run: (params: {
+    dataset_id: string;
+    image_ids?: string[];
+    model: string;
+    style: string;
+    overwrite: boolean;
+    custom_prompt?: string;
+  }) => client.post<{ job_id: string; total: number }>("/captioning/run", params).then((r) => r.data),
+  unloadModel: (model_id: string) => client.delete(`/captioning/model/${model_id}/unload`),
+};
