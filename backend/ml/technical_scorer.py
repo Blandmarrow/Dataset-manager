@@ -12,12 +12,17 @@ logger = logging.getLogger(__name__)
 BLUR_THRESHOLD = 100.0   # Laplacian variance below this = blurry
 NOISE_THRESHOLD = 15.0   # noise score above this = noisy
 DUPLICATE_THRESHOLD = 8  # Hamming distance threshold
+UNIFORMITY_THRESHOLD = 12.0  # grayscale std dev below this = near-uniform
 
 
 def score_technical_sync(image_path: str) -> dict:
     img_cv = cv2.imread(image_path)
     if img_cv is None:
-        return {"blur_score": 0.0, "noise_score": 0.0, "is_blurry": True, "is_noisy": False}
+        return {
+            "blur_score": 0.0, "noise_score": 0.0, "is_blurry": True, "is_noisy": False,
+            "uniformity_score": 0.0, "is_uniform": True,
+            "color_score": 0.0, "saturation_score": 0.0,
+        }
 
     gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
 
@@ -28,11 +33,32 @@ def score_technical_sync(image_path: str) -> dict:
     smoothed = cv2.GaussianBlur(gray.astype(np.float32), (5, 5), 0)
     noise_score = float(np.std(gray.astype(np.float32) - smoothed))
 
+    # Near-uniform detection
+    uniformity_score = float(np.std(gray.astype(np.float32)))
+
+    # Color richness — Hasler & Süsstrunk 2003
+    img_f = img_cv.astype(np.float32)
+    R, G, B = img_f[:, :, 2], img_f[:, :, 1], img_f[:, :, 0]  # OpenCV is BGR
+    rg = R - G
+    yb = 0.5 * (R + G) - B
+    color_score = float(
+        np.sqrt(np.std(rg) ** 2 + np.std(yb) ** 2)
+        + 0.3 * np.sqrt(np.mean(rg) ** 2 + np.mean(yb) ** 2)
+    )
+
+    # Saturation — mean HSV S channel
+    hsv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2HSV)
+    saturation_score = float(np.mean(hsv[:, :, 1]) / 255.0)
+
     return {
         "blur_score": round(blur_score, 3),
         "noise_score": round(noise_score, 3),
         "is_blurry": blur_score < BLUR_THRESHOLD,
         "is_noisy": noise_score > NOISE_THRESHOLD,
+        "uniformity_score": round(uniformity_score, 3),
+        "is_uniform": uniformity_score < UNIFORMITY_THRESHOLD,
+        "color_score": round(color_score, 3),
+        "saturation_score": round(saturation_score, 4),
     }
 
 
@@ -51,7 +77,11 @@ async def score_images_technical(
         try:
             scores = await loop.run_in_executor(None, score_technical_sync, path)
         except Exception:
-            scores = {"blur_score": 0.0, "noise_score": 0.0, "is_blurry": False, "is_noisy": False}
+            scores = {
+                "blur_score": 0.0, "noise_score": 0.0, "is_blurry": False, "is_noisy": False,
+                "uniformity_score": 0.0, "is_uniform": False,
+                "color_score": 0.0, "saturation_score": 0.0,
+            }
         results.append(scores)
 
         if job_id and i % 10 == 0:

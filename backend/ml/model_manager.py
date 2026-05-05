@@ -154,6 +154,29 @@ class ModelManager:
 
         return ModelEntry({"clip": clip_model, "mlp": mlp, "preprocess": preprocess}, None, vram_mb=3500)
 
+    async def load_dino(self) -> ModelEntry:
+        model_id = "dino"
+        async with self._get_lock(model_id):
+            if model_id in self._registry:
+                return self._registry[model_id]
+            loop = asyncio.get_event_loop()
+            entry = await loop.run_in_executor(None, self._load_dino_sync)
+            self._registry[model_id] = entry
+            return entry
+
+    def _load_dino_sync(self) -> ModelEntry:
+        import torch
+        from transformers import AutoModel, AutoImageProcessor
+
+        model_name = "facebook/dinov2-base"
+        logger.info("Loading %s...", model_name)
+        self._evict_lru(1200)
+
+        processor = AutoImageProcessor.from_pretrained(model_name)
+        model = AutoModel.from_pretrained(model_name, torch_dtype=torch.float16)
+        model = model.to("cuda").eval()
+        return ModelEntry(model, processor, vram_mb=1200)
+
     async def unload(self, model_id: str) -> None:
         import torch
         async with self._get_lock(model_id):
@@ -173,6 +196,7 @@ class ModelManager:
             {"id": "florence2_promptgen", "name": "Florence-2 PromptGen v2", "vram_mb": 5500},
             {"id": "paligemma2", "name": "PaliGemma-2 3B", "vram_mb": 6000},
             {"id": "aesthetic", "name": "LAION Aesthetic Predictor", "vram_mb": 3500},
+            {"id": "dino", "name": "DINOv2-base", "vram_mb": 1200},
         ]
         return [{**m, "loaded": m["id"] in loaded} for m in all_models]
 

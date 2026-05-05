@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Copy } from "lucide-react";
+import { AlertTriangle, Copy, Type } from "lucide-react";
 import clsx from "clsx";
 import type { ImageListItem } from "../../types";
 import { imagesApi } from "../../api/images";
@@ -23,6 +23,7 @@ export default function ImageCard({ image }: Props) {
   const selected = isSelected(image.id);
   const isDuplicate = image.quality_flags?.is_duplicate as boolean | undefined;
   const isBlurry = image.quality_flags?.is_blurry as boolean | undefined;
+  const hasWatermark = image.quality_flags?.has_watermark as boolean | undefined;
 
   return (
     <div
@@ -55,10 +56,11 @@ export default function ImageCard({ image }: Props) {
         </div>
 
         {/* Warning badges */}
-        {(isDuplicate === true || isBlurry === true) && (
+        {(isDuplicate === true || isBlurry === true || hasWatermark === true) && (
           <div className="absolute top-1.5 right-1.5 flex gap-1">
             {isDuplicate && <span title="Duplicate"><Copy size={12} className="text-yellow-400" /></span>}
             {isBlurry && <span title="Blurry"><AlertTriangle size={12} className="text-orange-400" /></span>}
+            {hasWatermark && <span title="Watermark detected"><Type size={12} className="text-blue-400" /></span>}
           </div>
         )}
 

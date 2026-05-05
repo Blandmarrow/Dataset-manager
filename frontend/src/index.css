@@ -25,5 +25,6 @@
   .badge-yellow { @apply badge bg-yellow-900/60 text-yellow-400; }
   .badge-red { @apply badge bg-red-900/60 text-red-400; }
   .badge-blue { @apply badge bg-blue-900/60 text-blue-400; }
+  .badge-orange { @apply badge bg-orange-900/60 text-orange-400; }
   .badge-gray { @apply badge bg-gray-700 text-gray-300; }
 }

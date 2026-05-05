@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, JSON, LargeBinary, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.database import Base
@@ -35,6 +35,13 @@ class Image(Base):
     aesthetic_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     blur_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     noise_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    uniformity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    watermark_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    color_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    saturation_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    style_similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    clip_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    dino_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     quality_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     # Caption / tags
@@ -50,5 +57,6 @@ class Image(Base):
     __table_args__ = (
         Index("ix_images_dataset_aesthetic", "dataset_id", "aesthetic_score"),
         Index("ix_images_dataset_blur", "dataset_id", "blur_score"),
+        Index("ix_images_dataset_similarity", "dataset_id", "style_similarity_score"),
         UniqueConstraint("dataset_id", "filename", name="uq_dataset_filename"),
     )

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Upload, CheckSquare, Square } from "lucide-react";
@@ -15,19 +15,55 @@ const SORT_OPTIONS = [
   { label: "Score ↓", sort: "aesthetic_score", order: "desc" },
   { label: "Score ↑", sort: "aesthetic_score", order: "asc" },
   { label: "Name A-Z", sort: "filename", order: "asc" },
+  { label: "Style similarity ↓", sort: "style_similarity_score", order: "desc" },
+  { label: "Colorfulness ↓", sort: "color_score", order: "desc" },
+  { label: "Colorfulness ↑", sort: "color_score", order: "asc" },
 ];
+
+function loadSavedState(datasetId: string) {
+  try {
+    const raw = sessionStorage.getItem(`gallery-state-${datasetId}`);
+    if (raw) return JSON.parse(raw) as { page: number; sortIdx: number; captionedFilter: boolean | null; scrollTop: number };
+  } catch {}
+  return null;
+}
 
 export default function GalleryPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const qc = useQueryClient();
   const { selectAll, clear, count } = useSelectionStore();
 
-  const [page, setPage] = useState(1);
-  const [sortIdx, setSortIdx] = useState(0);
-  const [captionedFilter, setCaptionedFilter] = useState<boolean | undefined>();
+  const saved = datasetId ? loadSavedState(datasetId) : null;
+
+  const [page, setPage] = useState(saved?.page ?? 1);
+  const [sortIdx, setSortIdx] = useState(saved?.sortIdx ?? 0);
+  // sessionStorage serialises undefined as missing key; null stands in for "no filter"
+  const [captionedFilter, setCaptionedFilter] = useState<boolean | undefined>(
+    saved?.captionedFilter == null ? undefined : saved.captionedFilter
+  );
   const [uploading, setUploading] = useState(false);
 
   const sortOpt = SORT_OPTIONS[sortIdx];
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const hasRestoredScroll = useRef(false);
+
+  // Keep a ref to the latest mutable state so the unmount cleanup reads current values
+  const liveState = useRef({ page, sortIdx, captionedFilter });
+  liveState.current = { page, sortIdx, captionedFilter };
+
+  // Save state to sessionStorage on unmount
+  useEffect(() => {
+    return () => {
+      const scrollTop = scrollRef.current?.scrollTop ?? 0;
+      const { page, sortIdx, captionedFilter } = liveState.current;
+      if (datasetId) {
+        sessionStorage.setItem(
+          `gallery-state-${datasetId}`,
+          JSON.stringify({ page, sortIdx, captionedFilter: captionedFilter ?? null, scrollTop })
+        );
+      }
+    };
+  }, [datasetId]);
 
   const { data: dataset } = useQuery({
     queryKey: ["dataset", datasetId],
@@ -48,6 +84,30 @@ export default function GalleryPage() {
       }),
     enabled: !!datasetId,
   });
+
+  // Restore scroll position once images have rendered
+  useEffect(() => {
+    if (!isLoading && images.length > 0 && !hasRestoredScroll.current && scrollRef.current && saved?.scrollTop) {
+      hasRestoredScroll.current = true;
+      scrollRef.current.scrollTop = saved.scrollTop;
+    }
+  }, [isLoading, images.length]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep navigation context in sessionStorage so the detail page can navigate prev/next across pages
+  useEffect(() => {
+    if (images.length > 0 && datasetId) {
+      sessionStorage.setItem(
+        `gallery-nav-${datasetId}`,
+        JSON.stringify({
+          ids: images.map((i) => i.id),
+          page,
+          sort: sortOpt.sort,
+          order: sortOpt.order,
+          captionedFilter: captionedFilter ?? null,
+        })
+      );
+    }
+  }, [images, datasetId, page, sortOpt, captionedFilter]);
 
   const handleUpload = useCallback(async (files: FileList) => {
     if (!datasetId) return;
@@ -83,7 +143,7 @@ export default function GalleryPage() {
         <select
           className="input w-36"
           value={sortIdx}
-          onChange={(e) => { setSortIdx(Number(e.target.value)); setPage(1); }}
+          onChange={(e) => { setSortIdx(Number(e.target.value)); setPage(1); hasRestoredScroll.current = false; }}
         >
           {SORT_OPTIONS.map((o, i) => <option key={i} value={i}>{o.label}</option>)}
         </select>
@@ -95,6 +155,7 @@ export default function GalleryPage() {
             const v = e.target.value;
             setCaptionedFilter(v === "" ? undefined : v === "true");
             setPage(1);
+            hasRestoredScroll.current = false;
           }}
         >
           <option value="">All images</option>
@@ -127,6 +188,7 @@ export default function GalleryPage() {
 
       {/* Grid */}
       <div
+        ref={scrollRef}
         className="flex-1 overflow-y-auto p-4"
         onDragOver={(e) => e.preventDefault()}
         onDrop={handleDrop}
@@ -149,10 +211,10 @@ export default function GalleryPage() {
         )}
 
         {/* Pagination */}
-        {images.length === 100 && (
+        {(page > 1 || images.length === 100) && (
           <div className="flex justify-center gap-3 mt-6">
             {page > 1 && <button className="btn-secondary" onClick={() => setPage(p => p - 1)}>← Previous</button>}
-            <button className="btn-secondary" onClick={() => setPage(p => p + 1)}>Next →</button>
+            {images.length === 100 && <button className="btn-secondary" onClick={() => setPage(p => p + 1)}>Next →</button>}
           </div>
         )}
       </div>

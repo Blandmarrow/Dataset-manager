@@ -1,7 +1,7 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Save, Crop, AlertTriangle, Copy, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Save, Crop, AlertTriangle, Copy, Sparkles, ChevronDown, ChevronUp, Type } from "lucide-react";
 import Cropper from "react-easy-crop";
 import toast from "react-hot-toast";
 import { imagesApi } from "../api/images";
@@ -53,6 +53,98 @@ export default function ImageDetailPage() {
   const [aiStyle, setAiStyle] = useState("detailed");
   const [aiCustomPrompt, setAiCustomPrompt] = useState("");
   const [aiJobId, setAiJobId] = useState<string | null>(null);
+
+  // Navigation context written by GalleryPage — re-read whenever imageId changes (we may have
+  // updated sessionStorage just before navigating, so the fresh read gets the new page's data)
+  const navCtx = useMemo(() => {
+    if (!datasetId) return null;
+    try {
+      const raw = sessionStorage.getItem(`gallery-nav-${datasetId}`);
+      return raw
+        ? (JSON.parse(raw) as { ids: string[]; page: number; sort: string; order: string; captionedFilter: boolean | null })
+        : null;
+    } catch { return null; }
+  }, [datasetId, imageId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const currentIndex = navCtx ? navCtx.ids.indexOf(imageId ?? "") : -1;
+  // "at end" means last slot of a full page — there may be a next page
+  const atEnd = !!navCtx && currentIndex === navCtx.ids.length - 1 && navCtx.ids.length === 100;
+  const atStart = currentIndex === 0 && !!navCtx && navCtx.page > 1;
+
+  const { data: nextPageData } = useQuery({
+    queryKey: ["gallery-nav", datasetId, navCtx?.page, navCtx?.sort, navCtx?.order, navCtx?.captionedFilter, "next"],
+    queryFn: () => imagesApi.list({
+      dataset_id: datasetId!,
+      page: navCtx!.page + 1,
+      limit: 100,
+      sort: navCtx!.sort,
+      order: navCtx!.order,
+      captioned: navCtx?.captionedFilter ?? undefined,
+    }),
+    enabled: atEnd,
+    staleTime: 60_000,
+  });
+
+  const { data: prevPageData } = useQuery({
+    queryKey: ["gallery-nav", datasetId, navCtx?.page, navCtx?.sort, navCtx?.order, navCtx?.captionedFilter, "prev"],
+    queryFn: () => imagesApi.list({
+      dataset_id: datasetId!,
+      page: navCtx!.page - 1,
+      limit: 100,
+      sort: navCtx!.sort,
+      order: navCtx!.order,
+      captioned: navCtx?.captionedFilter ?? undefined,
+    }),
+    enabled: atStart,
+    staleTime: 60_000,
+  });
+
+  const prevId =
+    currentIndex > 0 ? navCtx!.ids[currentIndex - 1]
+    : atStart && prevPageData?.length ? prevPageData[prevPageData.length - 1].id
+    : null;
+
+  const nextId =
+    navCtx && currentIndex >= 0 && currentIndex < navCtx.ids.length - 1 ? navCtx.ids[currentIndex + 1]
+    : atEnd && nextPageData?.length ? nextPageData[0].id
+    : null;
+
+  const goTo = useCallback((id: string) => {
+    // When crossing a page boundary, update the nav context so subsequent navigation
+    // continues through the new page, and sync the gallery's saved page so Back lands correctly.
+    if (navCtx && datasetId) {
+      let newCtx: typeof navCtx | null = null;
+      if (atEnd && id === nextId && nextPageData?.length) {
+        newCtx = { ...navCtx, ids: nextPageData.map((i) => i.id), page: navCtx.page + 1 };
+      } else if (atStart && id === prevId && prevPageData?.length) {
+        newCtx = { ...navCtx, ids: prevPageData.map((i) => i.id), page: navCtx.page - 1 };
+      }
+      if (newCtx) {
+        sessionStorage.setItem(`gallery-nav-${datasetId}`, JSON.stringify(newCtx));
+        // Also update gallery state so "Back" returns to the right page
+        try {
+          const raw = sessionStorage.getItem(`gallery-state-${datasetId}`);
+          if (raw) {
+            const state = JSON.parse(raw);
+            sessionStorage.setItem(`gallery-state-${datasetId}`, JSON.stringify({ ...state, page: newCtx.page, scrollTop: 0 }));
+          }
+        } catch {}
+      }
+    }
+    navigate(`/datasets/${datasetId}/image/${id}`, { replace: true });
+  }, [navCtx, datasetId, atEnd, atStart, nextId, prevId, nextPageData, prevPageData, navigate]);
+
+  // Arrow-key navigation — skip when focus is inside a text field
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || (e.target as HTMLElement)?.isContentEditable) return;
+      if (e.key === "ArrowLeft" && prevId) goTo(prevId);
+      if (e.key === "ArrowRight" && nextId) goTo(nextId);
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [prevId, nextId, goTo]);
 
   const { data: image, isLoading: imageLoading } = useQuery({
     queryKey: ["image", imageId],
@@ -158,6 +250,8 @@ export default function ImageDetailPage() {
 
   const isDuplicate = image.quality_flags?.is_duplicate as boolean | undefined;
   const isBlurry = image.quality_flags?.is_blurry as boolean | undefined;
+  const isUniform = image.quality_flags?.is_uniform as boolean | undefined;
+  const hasWatermark = image.quality_flags?.has_watermark as boolean | undefined;
   const aiRunning = !!aiJobId && aiJobProgress?.status === "running";
 
   return (
@@ -168,6 +262,32 @@ export default function ImageDetailPage() {
           <button className="btn-ghost btn-sm flex items-center gap-1.5" onClick={() => navigate(-1)}>
             <ArrowLeft size={14} /> Back
           </button>
+
+          {navCtx && currentIndex >= 0 && (
+            <div className="flex items-center gap-1">
+              <button
+                className="btn-ghost btn-sm p-1"
+                onClick={() => prevId && goTo(prevId)}
+                disabled={!prevId}
+                title="Previous image (←)"
+              >
+                <ChevronLeft size={16} />
+              </button>
+              <span className="text-xs text-gray-500 tabular-nums w-20 text-center">
+                {currentIndex + 1} / {navCtx.ids.length}
+                {navCtx.page > 1 && <span className="ml-1 text-gray-600">p.{navCtx.page}</span>}
+              </span>
+              <button
+                className="btn-ghost btn-sm p-1"
+                onClick={() => nextId && goTo(nextId)}
+                disabled={!nextId}
+                title="Next image (→)"
+              >
+                <ChevronRight size={16} />
+              </button>
+            </div>
+          )}
+
           <span className="text-sm text-gray-400 truncate">{image.filename}</span>
           <div className="flex-1" />
           <button
@@ -240,13 +360,49 @@ export default function ImageDetailPage() {
                 <span>{image.blur_score?.toFixed(1)}</span>
               </>
             )}
+            {image.uniformity_score !== null && image.uniformity_score !== undefined && (
+              <>
+                <span className="text-gray-500">Uniformity</span>
+                <span className={isUniform ? "text-orange-400" : ""}>
+                  {image.uniformity_score.toFixed(1)}{isUniform ? " (flat)" : ""}
+                </span>
+              </>
+            )}
+            {image.watermark_score !== null && image.watermark_score !== undefined && (
+              <>
+                <span className="text-gray-500">Watermark</span>
+                <span className={hasWatermark ? "text-blue-400" : "text-gray-300"}>
+                  {(image.watermark_score * 100).toFixed(0)}%
+                </span>
+              </>
+            )}
+            {image.color_score !== null && image.color_score !== undefined && (
+              <>
+                <span className="text-gray-500">Colorfulness</span>
+                <span>{image.color_score.toFixed(1)}</span>
+              </>
+            )}
+            {image.saturation_score !== null && image.saturation_score !== undefined && (
+              <>
+                <span className="text-gray-500">Saturation</span>
+                <span>{(image.saturation_score * 100).toFixed(0)}%</span>
+              </>
+            )}
+            {image.style_similarity_score !== null && image.style_similarity_score !== undefined && (
+              <>
+                <span className="text-gray-500">Style match</span>
+                <span>{(image.style_similarity_score * 100).toFixed(0)}%</span>
+              </>
+            )}
           </div>
 
           {/* Quality flags */}
-          {(isDuplicate === true || isBlurry === true) && (
+          {(isDuplicate === true || isBlurry === true || isUniform === true || hasWatermark === true) && (
             <div className="flex gap-2 flex-wrap mt-2">
               {isBlurry === true && <span className="badge-yellow flex items-center gap-1"><AlertTriangle size={10} />Blurry</span>}
               {isDuplicate === true && <span className="badge-yellow flex items-center gap-1"><Copy size={10} />Duplicate</span>}
+              {isUniform === true && <span className="badge-orange flex items-center gap-1"><AlertTriangle size={10} />Near-uniform</span>}
+              {hasWatermark === true && <span className="badge-blue flex items-center gap-1"><Type size={10} />Watermark</span>}
             </div>
           )}
         </div>

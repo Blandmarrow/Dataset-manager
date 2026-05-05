@@ -46,7 +46,8 @@
       "Bash(venv/Scripts/python.exe -m pip install fastapi \"uvicorn[standard]\" \"sqlalchemy[asyncio]\" aiosqlite alembic sse-starlette python-multipart python-dotenv Pillow imagehash httpx aiohttp opencv-python scipy numpy huggingface-hub psutil pydantic-settings)",
       "Bash(../venv/Scripts/python.exe -m alembic init alembic)",
       "Bash(../venv/Scripts/python.exe -m alembic revision --autogenerate -m \"initial\")",
-      "Bash(npm create *)"
+      "Bash(npm create *)",
+      "WebFetch(domain:github.com)"
     ]
   }
 }

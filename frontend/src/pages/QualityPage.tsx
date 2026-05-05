@@ -1,19 +1,31 @@
 import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Star, RefreshCw, AlertTriangle } from "lucide-react";
+import { Star, RefreshCw, AlertTriangle, Layers, ChevronDown, ChevronUp } from "lucide-react";
 import toast from "react-hot-toast";
 import { qualityApi } from "../api/quality";
 import { imagesApi } from "../api/images";
 import { useJobSSE } from "../hooks/useSSE";
 import { useJobStore } from "../store/jobStore";
+import StyleReferencePicker from "../components/quality/StyleReferencePicker";
 
 export default function QualityPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const qc = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+
+  // Scoring options
   const [runAesthetic, setRunAesthetic] = useState(true);
   const [runTechnical, setRunTechnical] = useState(true);
+  const [runWatermark, setRunWatermark] = useState(false);
+  const [runEmbeddings, setRunEmbeddings] = useState(false);
+  const [runDino, setRunDino] = useState(false);
+
+  // Style similarity
+  const [showStyleSection, setShowStyleSection] = useState(false);
+  const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set());
+  const [externalRefFiles, setExternalRefFiles] = useState<File[]>([]);
+  const [embeddingType, setEmbeddingType] = useState<"clip" | "dino">("clip");
 
   useJobSSE(activeJobId);
   const jobProgress = useJobStore((s) => s.activeJobs.get(activeJobId ?? ""));
@@ -34,7 +46,14 @@ export default function QualityPage() {
 
   const scoreMutation = useMutation({
     mutationFn: () =>
-      qualityApi.score({ dataset_id: datasetId!, run_aesthetic: runAesthetic, run_technical: runTechnical }),
+      qualityApi.score({
+        dataset_id: datasetId!,
+        run_aesthetic: runAesthetic,
+        run_technical: runTechnical,
+        run_watermark: runWatermark,
+        run_embeddings: runEmbeddings,
+        run_dino: runEmbeddings && runDino,
+      }),
     onSuccess: (data) => {
       if (data.job_id) {
         setActiveJobId(data.job_id);
@@ -54,7 +73,41 @@ export default function QualityPage() {
     },
   });
 
+  const similarityMutation = useMutation({
+    mutationFn: async () => {
+      let reference_embeddings: string[] = [];
+      if (externalRefFiles.length > 0) {
+        const result = await qualityApi.embedReferences(externalRefFiles);
+        reference_embeddings = result.embeddings;
+      }
+      return qualityApi.styleSimilarity({
+        dataset_id: datasetId!,
+        reference_image_ids: Array.from(selectedRefIds),
+        reference_embeddings,
+        embedding_type: externalRefFiles.length > 0 ? "clip" : embeddingType,
+      });
+    },
+    onSuccess: (data) => {
+      toast.success(`Style similarity scored for ${data.updated} images`);
+      qc.invalidateQueries({ queryKey: ["images", datasetId] });
+    },
+    onError: (err: unknown) => {
+      const msg = err instanceof Error ? err.message : "Style similarity scoring failed";
+      toast.error(msg);
+    },
+  });
+
+  const toggleRef = (id: string) => {
+    setSelectedRefIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   const dupGroups = duplicates?.groups ?? [];
+  const isRunning = scoreMutation.isPending || jobProgress?.status === "running";
 
   return (
     <div className="p-6 space-y-6 max-w-3xl">
@@ -63,15 +116,30 @@ export default function QualityPage() {
       {/* Controls */}
       <div className="card p-5 space-y-4">
         <h3 className="font-medium flex items-center gap-2"><Star size={16} />Run Quality Analysis</h3>
-        <div className="flex gap-4">
+
+        <div className="space-y-2">
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={runAesthetic} onChange={(e) => setRunAesthetic(e.target.checked)} />
             <span className="text-sm">Aesthetic Score (LAION)</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input type="checkbox" checked={runTechnical} onChange={(e) => setRunTechnical(e.target.checked)} />
-            <span className="text-sm">Technical (blur, noise, duplicates)</span>
+            <span className="text-sm">Technical (blur, noise, duplicates, uniformity, color richness)</span>
           </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={runWatermark} onChange={(e) => setRunWatermark(e.target.checked)} />
+            <span className="text-sm">Watermark / text detection (uses CLIP)</span>
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={runEmbeddings} onChange={(e) => setRunEmbeddings(e.target.checked)} />
+            <span className="text-sm">Compute style embeddings (CLIP) — required for style similarity</span>
+          </label>
+          {runEmbeddings && (
+            <label className="flex items-center gap-2 cursor-pointer ml-6">
+              <input type="checkbox" checked={runDino} onChange={(e) => setRunDino(e.target.checked)} />
+              <span className="text-sm text-gray-400">Also compute DINOv2 embeddings (~1.2 GB VRAM)</span>
+            </label>
+          )}
         </div>
 
         {/* Progress */}
@@ -91,21 +159,90 @@ export default function QualityPage() {
         <button
           className="btn-primary flex items-center gap-2"
           onClick={() => scoreMutation.mutate()}
-          disabled={scoreMutation.isPending || jobProgress?.status === "running"}
+          disabled={isRunning}
         >
-          <RefreshCw size={14} /> Run Scoring
+          <RefreshCw size={14} className={isRunning ? "animate-spin" : ""} /> Run Scoring
         </button>
       </div>
 
       {/* Score legend */}
       <div className="card p-4">
         <h3 className="font-medium mb-3 text-sm text-gray-400 uppercase tracking-wide">Score Guide</h3>
-        <div className="flex gap-4 text-sm">
+        <div className="flex gap-3 text-sm flex-wrap">
           <span className="badge-red">1–4 Low quality</span>
           <span className="badge-yellow">4–6 Average</span>
           <span className="badge-green">6–10 High quality</span>
           <span className="badge-gray">Unscored</span>
+          <span className="badge-blue">Watermark detected</span>
+          <span className="badge-orange">Near-uniform</span>
         </div>
+      </div>
+
+      {/* Style Similarity */}
+      <div className="card p-5 space-y-4">
+        <button
+          className="w-full flex items-center justify-between"
+          onClick={() => setShowStyleSection((v) => !v)}
+        >
+          <h3 className="font-medium flex items-center gap-2">
+            <Layers size={16} />Style Similarity
+          </h3>
+          {showStyleSection ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+        </button>
+
+        {showStyleSection && (
+          <div className="space-y-4">
+            <p className="text-xs text-gray-400">
+              Select reference images that represent your target style. Dataset references require
+              CLIP embeddings to be computed first (enable above). Local file references are
+              embedded on-the-fly when you click Score Similarity.
+            </p>
+
+            <div className="space-y-1">
+              <label className="label">Embedding model</label>
+              <div className="flex gap-2">
+                <button
+                  className={embeddingType === "clip" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
+                  onClick={() => setEmbeddingType("clip")}
+                >
+                  CLIP
+                </button>
+                <button
+                  className={embeddingType === "dino" ? "btn-primary btn-sm" : "btn-secondary btn-sm"}
+                  onClick={() => setEmbeddingType("dino")}
+                  disabled={externalRefFiles.length > 0}
+                  title={externalRefFiles.length > 0 ? "Local file references always use CLIP" : "Requires DINOv2 embeddings to be computed"}
+                >
+                  DINOv2
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <label className="label">Reference images</label>
+              {datasetId && (
+                <StyleReferencePicker
+                  datasetId={datasetId}
+                  selectedIds={selectedRefIds}
+                  onToggle={toggleRef}
+                  externalFiles={externalRefFiles}
+                  onExternalFilesChange={setExternalRefFiles}
+                />
+              )}
+            </div>
+
+            <button
+              className="btn-primary flex items-center gap-2"
+              onClick={() => similarityMutation.mutate()}
+              disabled={(selectedRefIds.size === 0 && externalRefFiles.length === 0) || similarityMutation.isPending}
+            >
+              <RefreshCw size={14} className={similarityMutation.isPending ? "animate-spin" : ""} />
+              Score Similarity
+              {(selectedRefIds.size + externalRefFiles.length) > 0 &&
+                ` (${selectedRefIds.size + externalRefFiles.length} refs)`}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Duplicates */}

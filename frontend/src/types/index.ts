@@ -35,6 +35,11 @@ export interface ImageListItem {
   format: string | null;
   aesthetic_score: number | null;
   blur_score: number | null;
+  uniformity_score: number | null;
+  watermark_score: number | null;
+  color_score: number | null;
+  saturation_score: number | null;
+  style_similarity_score: number | null;
   quality_flags: Record<string, unknown>;
   caption_text: string;
   tags_json: string[];

@@ -17,6 +17,11 @@ class ImageOut(BaseModel):
     aesthetic_score: float | None
     blur_score: float | None
     noise_score: float | None
+    uniformity_score: float | None = None
+    watermark_score: float | None = None
+    color_score: float | None = None
+    saturation_score: float | None = None
+    style_similarity_score: float | None = None
     quality_flags: dict[str, Any]
     caption_text: str
     caption_style: str
@@ -37,6 +42,11 @@ class ImageListItem(BaseModel):
     format: str | None
     aesthetic_score: float | None
     blur_score: float | None
+    uniformity_score: float | None = None
+    watermark_score: float | None = None
+    color_score: float | None = None
+    saturation_score: float | None = None
+    style_similarity_score: float | None = None
     quality_flags: dict[str, Any]
     caption_text: str
     tags_json: list[str]

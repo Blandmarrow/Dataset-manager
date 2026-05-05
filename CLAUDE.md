@@ -51,7 +51,7 @@ Long-running operations (captioning, quality scoring, import, export, batch ops)
 
 `ml/model_manager.py` is a singleton that tracks loaded models and their VRAM usage. Before loading a model it calls `_evict_lru(needed_mb)` to free space. Each model_id gets its own `asyncio.Lock` to serialize inference. All inference runs in `loop.run_in_executor(None, _sync_fn)` to avoid blocking the event loop. Ollama models are not tracked — Ollama manages its own VRAM.
 
-Model IDs and their captioner modules:
+Model IDs and their captioner/scorer modules:
 | Prefix | Module |
 |---|---|
 | `florence2*` | `ml/florence_captioner.py` |
@@ -59,7 +59,18 @@ Model IDs and their captioner modules:
 
 `HF_TOKEN` from `.env` is injected into `os.environ` early in `main.py` so all `hf_hub_download` calls pick it up automatically.
 | `ollama:*` | `ml/ollama_captioner.py` (HTTP calls to localhost:11434) |
-| aesthetic predictor | `ml/aesthetic_scorer.py` (auto-downloads weights from `camenduru/improved-aesthetic-predictor` via `hf_hub_download`) |
+| `aesthetic` | `ml/aesthetic_scorer.py` (auto-downloads weights from `camenduru/improved-aesthetic-predictor` via `hf_hub_download`; also used for CLIP zero-shot watermark detection and CLIP embedding extraction) |
+| `dino` | `ml/dino_scorer.py` (`facebook/dinov2-base` via HuggingFace `transformers`; ~1.2 GB VRAM; used for DINOv2 embedding extraction) |
+
+Quality scorers and what they add to `Image`:
+| Module | Columns written | Notes |
+|---|---|---|
+| `ml/technical_scorer.py` | `blur_score`, `noise_score`, `uniformity_score`, `color_score`, `saturation_score`; flags `is_blurry`, `is_noisy`, `is_uniform` | Pure OpenCV/numpy, no GPU |
+| `ml/aesthetic_scorer.py` | `aesthetic_score` (1–10), `watermark_score` (0–1), flag `has_watermark`, `clip_embedding` (BLOB, float16) | CLIP ViT-L-14; text encoder used for zero-shot watermark; image encoder for embeddings |
+| `ml/dino_scorer.py` | `dino_embedding` (BLOB, float16) | DINOv2 CLS token, 768-dim |
+| `ml/similarity_scorer.py` | — | CPU-only; `compute_style_similarity(ref_bytes, cand_bytes)` returns cosine similarity list |
+
+Style similarity flow: (1) run scoring with `run_embeddings=True` to store `clip_embedding`/`dino_embedding` per image; (2) call `POST /quality/style-similarity` with `reference_image_ids` and/or `reference_embeddings` (base64 float16 bytes) to write `style_similarity_score` for all images via CPU numpy matmul — no job queue needed. Local reference files (not in the dataset) can be embedded on-the-fly via `POST /quality/embed-references` (multipart upload → returns base64 embeddings to pass as `reference_embeddings`).
 
 **TorchDynamo is disabled** (`TORCHDYNAMO_DISABLE=1` set in `main.py`). Triton is unavailable on Windows and single-image inference gains nothing from `torch.compile`, so it is disabled for the entire process. Do not remove this without re-testing all ML inference paths on Windows.
 
@@ -84,6 +95,17 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 ### Layout
 
 **Sidebar** uses `useMatch("/datasets/:datasetId/*")` (not `useParams`) to detect the active dataset, because the Sidebar renders outside the `<Routes>` tree and `useParams` would always return `{}` there.
+
+### Gallery navigation state
+
+`GalleryPage` persists two keys to `sessionStorage` (keyed by `datasetId`):
+
+| Key | Contents | Purpose |
+|---|---|---|
+| `gallery-state-${datasetId}` | `{ page, sortIdx, captionedFilter, scrollTop }` | Restores page/sort/filter/scroll when returning from detail view |
+| `gallery-nav-${datasetId}` | `{ ids, page, sort, order, captionedFilter }` | Ordered image ID list + query context for prev/next navigation in the detail view |
+
+`ImageDetailPage` reads `gallery-nav-*` to support arrow-key navigation. When the user reaches the boundary of the current page it pre-fetches the adjacent page (`useQuery`, `enabled: atEnd / atStart`) and on crossing writes the new page's context back to `gallery-nav-*` and updates `gallery-state-*` so that **Back** returns to the correct gallery page. Arrow keys are suppressed when an `<input>` or `<textarea>` has focus.
 
 ### Styling
 
