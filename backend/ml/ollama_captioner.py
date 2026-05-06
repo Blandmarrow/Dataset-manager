@@ -7,6 +7,7 @@ import httpx
 from PIL import Image
 
 from backend.config import settings
+from backend.ml.image_utils import preprocess_for_caption
 
 logger = logging.getLogger(__name__)
 
@@ -18,8 +19,13 @@ STYLE_PROMPTS = {
 }
 
 
-def _resize_for_ollama(path: str, max_px: int = 1024) -> str:
-    img = Image.open(path).convert("RGB")
+def _resize_for_ollama(
+    path: str,
+    max_px: int = 1024,
+    target_w: int | None = None,
+    target_h: int | None = None,
+) -> str:
+    img = preprocess_for_caption(path, target_w, target_h)
     if max(img.width, img.height) > max_px:
         ratio = max_px / max(img.width, img.height)
         img = img.resize((int(img.width * ratio), int(img.height * ratio)), Image.Resampling.LANCZOS)
@@ -50,10 +56,12 @@ async def caption_image(
     model_name: str,
     style: str = "detailed",
     custom_prompt: str = "",
+    target_w: int | None = None,
+    target_h: int | None = None,
 ) -> str:
     prompt = custom_prompt or STYLE_PROMPTS.get(style, STYLE_PROMPTS["detailed"])
     b64 = await asyncio.get_event_loop().run_in_executor(
-        None, _resize_for_ollama, image_path, settings.ollama_image_max_px
+        None, _resize_for_ollama, image_path, settings.ollama_image_max_px, target_w, target_h
     )
 
     try:
@@ -80,6 +88,8 @@ async def caption_batch(
     style: str = "detailed",
     custom_prompt: str = "",
     job_id: str | None = None,
+    target_w: int | None = None,
+    target_h: int | None = None,
 ) -> list[str]:
     from backend.workers.progress import broadcaster
 
@@ -87,7 +97,7 @@ async def caption_batch(
     total = len(image_paths)
 
     for i, path in enumerate(image_paths):
-        caption = await caption_image(path, model_name, style, custom_prompt)
+        caption = await caption_image(path, model_name, style, custom_prompt, target_w, target_h)
         results.append(caption)
 
         if job_id:

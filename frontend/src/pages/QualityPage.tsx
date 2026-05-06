@@ -166,15 +166,102 @@ export default function QualityPage() {
       </div>
 
       {/* Score legend */}
-      <div className="card p-4">
-        <h3 className="font-medium mb-3 text-sm text-gray-400 uppercase tracking-wide">Score Guide</h3>
-        <div className="flex gap-3 text-sm flex-wrap">
-          <span className="badge-red">1–4 Low quality</span>
-          <span className="badge-yellow">4–6 Average</span>
-          <span className="badge-green">6–10 High quality</span>
-          <span className="badge-gray">Unscored</span>
-          <span className="badge-blue">Watermark detected</span>
-          <span className="badge-orange">Near-uniform</span>
+      <div className="card p-4 space-y-4">
+        <h3 className="font-medium text-sm text-gray-400 uppercase tracking-wide">Score Guide</h3>
+
+        {/* Aesthetic score quick key */}
+        <div>
+          <p className="text-xs text-gray-500 mb-2">Aesthetic score (1–10)</p>
+          <div className="flex gap-2 flex-wrap">
+            <span className="badge-red">1–4 · Reject</span>
+            <span className="badge-yellow">4–5 · Marginal</span>
+            <span className="badge-green">5–6.5 · Acceptable</span>
+            <span className="badge-green">6.5–10 · High quality</span>
+            <span className="badge-gray">Unscored</span>
+          </div>
+        </div>
+
+        {/* Per-metric breakdown */}
+        <div className="space-y-3 text-xs">
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Aesthetic</span>
+            <span className="text-gray-400">
+              LAION improved aesthetic predictor trained on human preference ratings.
+              Aim for <span className="text-green-400">≥ 5.0</span> as a minimum;
+              <span className="text-green-400"> ≥ 6.5</span> for curated datasets.
+              Below <span className="text-red-400">4.0</span> rarely adds useful signal.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Blur / Sharpness</span>
+            <span className="text-gray-400">
+              Laplacian variance — higher means sharper edges.
+              Images flagged <span className="badge-yellow inline">Blurry</span> have
+              too little high-frequency detail; the model learns soft, smeared output.
+              Exclude unless intentional soft-focus is part of the style.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Noise</span>
+            <span className="text-gray-400">
+              Estimated signal-to-noise in smooth regions.
+              Heavy sensor or compression noise corrupts fine detail and
+              teaches the model to reproduce grain artifacts. Exclude flagged images.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Watermark</span>
+            <span className="text-gray-400">
+              CLIP zero-shot probability (0–1) of text overlay, logo, or watermark.
+              Flagged at <span className="text-blue-400">≥ 0.60</span>.
+              Even partially watermarked images teach the model to reproduce
+              text artifacts — exclude or manually review.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Near-uniform</span>
+            <span className="text-gray-400">
+              Pixel std dev of grayscale image — flagged <span className="badge-orange inline">Near-uniform</span> below 12.
+              Solid backgrounds, colour gradients, and blank canvases
+              provide almost no useful information; they inflate epoch count without benefit.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Colorfulness</span>
+            <span className="text-gray-400">
+              Hasler-Süsstrunk metric — higher is more vivid.
+              Values <span className="text-gray-300">below ~10</span> indicate near-grayscale images.
+              Useful for filtering desaturated or washed-out images from colour-focused datasets.
+            </span>
+          </div>
+
+          <div className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-0.5 items-start">
+            <span className="text-gray-400 font-medium pt-0.5">Style similarity</span>
+            <span className="text-gray-400">
+              Cosine similarity to your chosen reference images (0–1 after normalisation).
+              <span className="text-green-400"> ≥ 0.5</span> is a reasonable starting threshold
+              for style consistency. Lower values indicate stylistic outliers that may harm
+              concept coherence.
+            </span>
+          </div>
+
+        </div>
+
+        {/* Flag key */}
+        <div className="pt-1 border-t border-gray-700/50">
+          <p className="text-xs text-gray-500 mb-2">Quality flags</p>
+          <div className="flex gap-2 flex-wrap">
+            <span className="badge-blue">Watermark detected</span>
+            <span className="badge-orange">Near-uniform</span>
+            <span className="badge-yellow">Blurry</span>
+            <span className="badge-yellow">Duplicate</span>
+          </div>
         </div>
       </div>
 

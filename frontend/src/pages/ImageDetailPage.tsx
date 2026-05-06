@@ -10,6 +10,7 @@ import { captioningApi } from "../api/captioning";
 import { useJobStore } from "../store/jobStore";
 import TagEditor from "../components/caption/TagEditor";
 import PromptPresetManager from "../components/caption/PromptPresetManager";
+import ResolutionPicker from "../components/caption/ResolutionPicker";
 import type { ModelInfo, OllamaModel } from "../types";
 
 function formatSize(bytes: number | null) {
@@ -52,6 +53,8 @@ export default function ImageDetailPage() {
   const [aiModel, setAiModel] = useState("");
   const [aiStyle, setAiStyle] = useState("detailed");
   const [aiCustomPrompt, setAiCustomPrompt] = useState("");
+  const [aiTargetWidth, setAiTargetWidth] = useState<number | null>(null);
+  const [aiTargetHeight, setAiTargetHeight] = useState<number | null>(null);
   const [aiJobId, setAiJobId] = useState<string | null>(null);
 
   // Navigation context written by GalleryPage — re-read whenever imageId changes (we may have
@@ -229,6 +232,7 @@ export default function ImageDetailPage() {
         style: aiStyle,
         overwrite: true,
         custom_prompt: aiCustomPrompt,
+        ...(aiTargetWidth && aiTargetHeight ? { target_width: aiTargetWidth, target_height: aiTargetHeight } : {}),
       }),
     onSuccess: (data) => {
       if (data.job_id) {
@@ -542,6 +546,12 @@ export default function ImageDetailPage() {
                     setAiStyle(p.style);
                     setAiCustomPrompt(p.prompt);
                   }}
+                />
+
+                <ResolutionPicker
+                  targetWidth={aiTargetWidth}
+                  targetHeight={aiTargetHeight}
+                  onChange={(w, h) => { setAiTargetWidth(w); setAiTargetHeight(h); }}
                 />
 
                 {/* Progress */}

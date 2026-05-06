@@ -59,6 +59,8 @@ Model IDs and their captioner/scorer modules:
 
 `HF_TOKEN` from `.env` is injected into `os.environ` early in `main.py` so all `hf_hub_download` calls pick it up automatically.
 | `ollama:*` | `ml/ollama_captioner.py` (HTTP calls to localhost:11434) |
+
+**Target resolution preprocessing**: `CaptionJobRequest` accepts optional `target_width` / `target_height`. When set, `ml/image_utils.py::preprocess_for_caption()` center-crops each image to the target aspect ratio and resizes it to the exact target resolution before inference. This ensures captions describe the composition the model will actually see at training time. All three captioners (Florence-2, PaliGemma-2, Ollama) call this utility; Ollama's existing `max_px` scale-down runs afterward on the already-cropped image. Omitting both fields leaves behavior unchanged.
 | `aesthetic` | `ml/aesthetic_scorer.py` (auto-downloads weights from `camenduru/improved-aesthetic-predictor` via `hf_hub_download`; also used for CLIP zero-shot watermark detection and CLIP embedding extraction) |
 | `dino` | `ml/dino_scorer.py` (`facebook/dinov2-base` via HuggingFace `transformers`; ~1.2 GB VRAM; used for DINOv2 embedding extraction) |
 
@@ -69,6 +71,20 @@ Quality scorers and what they add to `Image`:
 | `ml/aesthetic_scorer.py` | `aesthetic_score` (1–10), `watermark_score` (0–1), flag `has_watermark`, `clip_embedding` (BLOB, float16) | CLIP ViT-L-14; text encoder used for zero-shot watermark; image encoder for embeddings |
 | `ml/dino_scorer.py` | `dino_embedding` (BLOB, float16) | DINOv2 CLS token, 768-dim |
 | `ml/similarity_scorer.py` | — | CPU-only; `compute_style_similarity(ref_bytes, cand_bytes)` returns cosine similarity list |
+
+Flag thresholds (defined as constants in their respective modules):
+| Flag | Column | Threshold | Constant |
+|---|---|---|---|
+| `is_blurry` | `blur_score` (Laplacian variance) | < 80 | `BLUR_THRESHOLD` in `technical_scorer.py` |
+| `is_noisy` | `noise_score` (smooth-region std dev) | > 15 | `NOISE_THRESHOLD` in `technical_scorer.py` |
+| `is_uniform` | `uniformity_score` (grayscale std dev) | < 12 | `UNIFORMITY_THRESHOLD` in `technical_scorer.py` |
+| `has_watermark` | `watermark_score` (CLIP zero-shot, 0–1) | ≥ 0.6 | `WATERMARK_THRESHOLD` in `aesthetic_scorer.py` |
+
+Recommended training-data thresholds (surfaced in the QualityPage score guide):
+- **Aesthetic**: ≥ 5.0 minimum; ≥ 6.5 for curated sets; < 4.0 reject
+- **Watermark**: exclude any image with `has_watermark = True`
+- **Blur / Noise / Uniform**: exclude flagged images unless the flag matches intentional style
+- **Style similarity**: ≥ 0.5 cosine similarity as a starting point for style-consistent filtering
 
 Style similarity flow: (1) run scoring with `run_embeddings=True` to store `clip_embedding`/`dino_embedding` per image; (2) call `POST /quality/style-similarity` with `reference_image_ids` and/or `reference_embeddings` (base64 float16 bytes) to write `style_similarity_score` for all images via CPU numpy matmul — no job queue needed. Local reference files (not in the dataset) can be embedded on-the-fly via `POST /quality/embed-references` (multipart upload → returns base64 embeddings to pass as `reference_embeddings`).
 

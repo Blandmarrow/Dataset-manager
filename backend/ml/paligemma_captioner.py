@@ -2,6 +2,8 @@ import asyncio
 import logging
 from PIL import Image
 
+from backend.ml.image_utils import preprocess_for_caption
+
 logger = logging.getLogger(__name__)
 
 STYLE_PROMPTS = {
@@ -12,12 +14,18 @@ STYLE_PROMPTS = {
 }
 
 
-def infer_sync(image_path: str, model_entry, prompt: str) -> str:
+def infer_sync(
+    image_path: str,
+    model_entry,
+    prompt: str,
+    target_w: int | None = None,
+    target_h: int | None = None,
+) -> str:
     import torch
     model = model_entry.model
     processor = model_entry.processor
 
-    img = Image.open(image_path).convert("RGB")
+    img = preprocess_for_caption(image_path, target_w, target_h)
     inputs = processor(text=prompt, images=img, return_tensors="pt").to("cuda", torch.bfloat16)
 
     try:
@@ -37,10 +45,16 @@ def infer_sync(image_path: str, model_entry, prompt: str) -> str:
         raise RuntimeError("GPU out of memory during PaliGemma-2 inference")
 
 
-async def caption_image(image_path: str, model_entry, style: str = "detailed") -> str:
+async def caption_image(
+    image_path: str,
+    model_entry,
+    style: str = "detailed",
+    target_w: int | None = None,
+    target_h: int | None = None,
+) -> str:
     prompt = STYLE_PROMPTS.get(style, STYLE_PROMPTS["detailed"])
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, infer_sync, image_path, model_entry, prompt)
+    return await loop.run_in_executor(None, infer_sync, image_path, model_entry, prompt, target_w, target_h)
 
 
 async def caption_batch(
@@ -48,6 +62,8 @@ async def caption_batch(
     model_entry,
     style: str = "detailed",
     job_id: str | None = None,
+    target_w: int | None = None,
+    target_h: int | None = None,
 ) -> list[str]:
     from backend.workers.progress import broadcaster
 
@@ -56,7 +72,7 @@ async def caption_batch(
 
     for i, path in enumerate(image_paths):
         try:
-            caption = await caption_image(path, model_entry, style)
+            caption = await caption_image(path, model_entry, style, target_w, target_h)
         except Exception as e:
             logger.error("PaliGemma-2 failed on %s: %s", path, e)
             caption = ""

@@ -21,6 +21,8 @@ class CaptionJobRequest(BaseModel):
     style: str = "detailed"
     overwrite: bool = False
     custom_prompt: str = ""
+    target_width: int | None = None
+    target_height: int | None = None
 
 
 @router.get("/models")
@@ -76,19 +78,26 @@ async def run_captioning(body: CaptionJobRequest, db: AsyncSession = Depends(get
             entry = await model_manager.load_florence2(variant)
             from backend.ml.florence_captioner import caption_batch
             paths = [p for _, p in image_data]
-            captions = await caption_batch(paths, entry, body.style, job_id=job_id)
+            captions = await caption_batch(
+                paths, entry, body.style, job_id=job_id,
+                target_w=body.target_width, target_h=body.target_height,
+            )
 
         elif is_paligemma:
             entry = await model_manager.load_paligemma2()
             from backend.ml.paligemma_captioner import caption_batch
             paths = [p for _, p in image_data]
-            captions = await caption_batch(paths, entry, body.style, job_id=job_id)
+            captions = await caption_batch(
+                paths, entry, body.style, job_id=job_id,
+                target_w=body.target_width, target_h=body.target_height,
+            )
 
         elif is_ollama:
             ollama_model = body.model.removeprefix("ollama:")
             paths = [p for _, p in image_data]
             captions = await ollama_captioner.caption_batch(
-                paths, ollama_model, body.style, body.custom_prompt, job_id=job_id
+                paths, ollama_model, body.style, body.custom_prompt, job_id=job_id,
+                target_w=body.target_width, target_h=body.target_height,
             )
         else:
             captions = [""] * len(image_data)

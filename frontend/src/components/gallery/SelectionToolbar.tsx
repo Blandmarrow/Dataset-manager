@@ -10,6 +10,7 @@ import { captioningApi } from "../../api/captioning";
 import { qualityApi } from "../../api/quality";
 import ConfirmDialog from "../common/ConfirmDialog";
 import PromptPresetManager from "../caption/PromptPresetManager";
+import ResolutionPicker from "../caption/ResolutionPicker";
 import type { ModelInfo, OllamaModel } from "../../types";
 
 const STYLE_LABELS: Record<string, string[]> = {
@@ -42,6 +43,8 @@ export default function SelectionToolbar({ datasetId }: Props) {
   const [captionStyle, setCaptionStyle] = useState("detailed");
   const [captionOverwrite, setCaptionOverwrite] = useState(false);
   const [captionCustomPrompt, setCaptionCustomPrompt] = useState("");
+  const [captionTargetWidth, setCaptionTargetWidth] = useState<number | null>(null);
+  const [captionTargetHeight, setCaptionTargetHeight] = useState<number | null>(null);
   const [runAesthetic, setRunAesthetic] = useState(true);
   const [runTechnical, setRunTechnical] = useState(true);
   const [scoreJobId, setScoreJobId] = useState<string | null>(null);
@@ -125,6 +128,7 @@ export default function SelectionToolbar({ datasetId }: Props) {
         style: captionStyle,
         overwrite: captionOverwrite,
         custom_prompt: captionCustomPrompt,
+        ...(captionTargetWidth && captionTargetHeight ? { target_width: captionTargetWidth, target_height: captionTargetHeight } : {}),
       }),
     onSuccess: (data) => {
       setShowCaption(false);
@@ -295,6 +299,12 @@ export default function SelectionToolbar({ datasetId }: Props) {
                     setCaptionStyle(p.style);
                     setCaptionCustomPrompt(p.prompt);
                   }}
+                />
+
+                <ResolutionPicker
+                  targetWidth={captionTargetWidth}
+                  targetHeight={captionTargetHeight}
+                  onChange={(w, h) => { setCaptionTargetWidth(w); setCaptionTargetHeight(h); }}
                 />
 
                 <label className="flex items-center gap-2 cursor-pointer text-sm">

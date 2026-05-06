@@ -7,6 +7,7 @@ import { captioningApi } from "../api/captioning";
 import { useJobSSE } from "../hooks/useSSE";
 import { useJobStore } from "../store/jobStore";
 import PromptPresetManager from "../components/caption/PromptPresetManager";
+import ResolutionPicker from "../components/caption/ResolutionPicker";
 import type { ModelInfo, OllamaModel } from "../types";
 
 const STYLE_LABELS: Record<string, string[]> = {
@@ -21,6 +22,8 @@ export default function CaptioningPage() {
   const [style, setStyle] = useState("detailed");
   const [overwrite, setOverwrite] = useState(false);
   const [customPrompt, setCustomPrompt] = useState("");
+  const [targetWidth, setTargetWidth] = useState<number | null>(null);
+  const [targetHeight, setTargetHeight] = useState<number | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
 
   useJobSSE(activeJobId);
@@ -39,6 +42,7 @@ export default function CaptioningPage() {
         style,
         overwrite,
         custom_prompt: customPrompt,
+        ...(targetWidth && targetHeight ? { target_width: targetWidth, target_height: targetHeight } : {}),
       }),
     onSuccess: (data) => {
       if (data.job_id) {
@@ -145,6 +149,12 @@ export default function CaptioningPage() {
               ))}
             </div>
           </div>
+
+          <ResolutionPicker
+            targetWidth={targetWidth}
+            targetHeight={targetHeight}
+            onChange={(w, h) => { setTargetWidth(w); setTargetHeight(h); }}
+          />
 
           <div>
             <label className="label">Custom Prompt (optional)</label>
