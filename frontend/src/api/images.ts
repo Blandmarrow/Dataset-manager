@@ -10,6 +10,16 @@ export interface ImageListParams {
   captioned?: boolean;
   min_score?: number;
   max_score?: number;
+  score_field?: string;
+  score_is_null?: boolean;
+  quality_flag?: string;
+  file_size_min?: number;
+  file_size_max?: number;
+  mp_min?: number;
+  mp_max?: number;
+  ar_min?: number;
+  ar_max?: number;
+  format_filter?: string;
 }
 
 export const imagesApi = {

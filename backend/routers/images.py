@@ -33,6 +33,14 @@ router = APIRouter(prefix="/images", tags=["images"])
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
 
+_ALLOWED_SCORE_FIELDS = frozenset({
+    "aesthetic_score", "blur_score", "noise_score", "uniformity_score",
+    "watermark_score", "color_score", "saturation_score", "style_similarity_score",
+})
+_ALLOWED_FLAG_KEYS = frozenset({
+    "is_blurry", "is_noisy", "is_uniform", "has_watermark", "is_duplicate",
+})
+
 
 def _safe_path(path_str: str, base_dir: Path) -> Path:
     resolved = Path(path_str).resolve()
@@ -51,17 +59,60 @@ async def list_images(
     captioned: bool | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
+    score_field: str | None = None,
+    score_is_null: bool | None = None,
+    quality_flag: str | None = None,
+    file_size_min: int | None = None,
+    file_size_max: int | None = None,
+    mp_min: float | None = None,
+    mp_max: float | None = None,
+    ar_min: float | None = None,
+    ar_max: float | None = None,
+    format_filter: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    if score_field and score_field not in _ALLOWED_SCORE_FIELDS:
+        raise HTTPException(400, f"Invalid score_field: {score_field}")
+    if quality_flag and quality_flag not in _ALLOWED_FLAG_KEYS:
+        raise HTTPException(400, f"Invalid quality_flag: {quality_flag}")
+
     q = select(Image).where(Image.dataset_id == dataset_id)
+
     if captioned is True:
         q = q.where(Image.caption_text != "")
     elif captioned is False:
         q = q.where(Image.caption_text == "")
-    if min_score is not None:
-        q = q.where(Image.aesthetic_score >= min_score)
-    if max_score is not None:
-        q = q.where(Image.aesthetic_score <= max_score)
+
+    # Score filtering — score_field selects the column; defaults to aesthetic_score
+    score_col = getattr(Image, score_field) if score_field else Image.aesthetic_score
+    if score_is_null is True:
+        q = q.where(score_col.is_(None))
+    else:
+        if min_score is not None:
+            q = q.where(score_col >= min_score)
+        if max_score is not None:
+            q = q.where(score_col <= max_score)
+
+    if quality_flag:
+        q = q.where(Image.quality_flags[quality_flag].as_boolean() == True)  # noqa: E712
+
+    if file_size_min is not None:
+        q = q.where(Image.file_size_bytes >= file_size_min)
+    if file_size_max is not None:
+        q = q.where(Image.file_size_bytes <= file_size_max)
+
+    if mp_min is not None:
+        q = q.where(Image.width * Image.height >= int(mp_min * 1_000_000))
+    if mp_max is not None:
+        q = q.where(Image.width * Image.height < int(mp_max * 1_000_000))
+
+    if ar_min is not None:
+        q = q.where(Image.width >= ar_min * Image.height)
+    if ar_max is not None:
+        q = q.where(Image.width < ar_max * Image.height)
+
+    if format_filter:
+        q = q.where(Image.format == format_filter)
 
     sort_col = getattr(Image, sort, Image.created_at)
     q = q.order_by(sort_col.desc() if order == "desc" else sort_col.asc())

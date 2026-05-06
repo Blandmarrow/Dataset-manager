@@ -43,3 +43,22 @@ class DatasetStats(BaseModel):
     aspect_ratio_distribution: dict[str, int]
     format_distribution: dict[str, int]
     score_distribution: dict[str, int]
+    # Extended distributions
+    blur_distribution: dict[str, int] = {}
+    noise_distribution: dict[str, int] = {}
+    uniformity_distribution: dict[str, int] = {}
+    watermark_distribution: dict[str, int] = {}
+    color_distribution: dict[str, int] = {}
+    saturation_distribution: dict[str, int] = {}
+    megapixel_distribution: dict[str, int] = {}
+    file_size_distribution: dict[str, int] = {}
+    file_size_summary: dict[str, float] = {}
+    aspect_ratio_fine: dict[str, int] = {}
+    caption_length_distribution: dict[str, int] = {}
+    quality_flag_counts: dict[str, int] = {}
+    score_coverage: dict[str, int] = {}
+
+
+class TagCooccurrence(BaseModel):
+    tags: list[str]
+    matrix: list[list[int]]

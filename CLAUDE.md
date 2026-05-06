@@ -123,6 +123,51 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 
 `ImageDetailPage` reads `gallery-nav-*` to support arrow-key navigation. When the user reaches the boundary of the current page it pre-fetches the adjacent page (`useQuery`, `enabled: atEnd / atStart`) and on crossing writes the new page's context back to `gallery-nav-*` and updates `gallery-state-*` so that **Back** returns to the correct gallery page. Arrow keys are suppressed when an `<input>` or `<textarea>` has focus.
 
+### Statistics page
+
+`frontend/src/pages/StatsPage.tsx` renders the dataset analytics dashboard. It makes three queries:
+
+| Query key | Source | Contents |
+|---|---|---|
+| `["dataset-stats", datasetId]` | `GET /datasets/{id}/stats` | All distributions (see schema below) |
+| `["tag-stats", datasetId]` | `GET /captions/dataset/{id}/tag-stats` | Top 500 tags with counts |
+| `["tag-cooccurrence", datasetId]` | `GET /datasets/{id}/tag-cooccurrence?limit=15` | Top-15 tag co-occurrence matrix |
+
+**`DatasetStats` schema** (in `backend/schemas/dataset.py`) includes these distribution dicts on top of the basic summary fields. All are computed in a single row-scan in `dataset_service.get_dataset_stats()`:
+
+| Field | Description |
+|---|---|
+| `blur_distribution` | Laplacian variance bucketed into 6 ranges |
+| `noise_distribution` | Smooth-region std dev bucketed into 6 ranges |
+| `uniformity_distribution` | Grayscale std dev bucketed into 5 ranges |
+| `watermark_distribution` | CLIP watermark score in 10 equal 0.1-wide bins |
+| `color_distribution` / `saturation_distribution` | Hasler-Süsstrunk color/saturation buckets |
+| `megapixel_distribution` | `width × height / 1M` bucketed into 7 ranges |
+| `file_size_distribution` | File size in MB bucketed into 6 ranges |
+| `file_size_summary` | `{min_mb, median_mb, p95_mb, max_mb}` |
+| `aspect_ratio_fine` | 8 common AR buckets (9:16+ → 21:9+) |
+| `caption_length_distribution` | Word count bucketed into 6 ranges |
+| `quality_flag_counts` | `{blurry, noisy, uniform, watermarked, duplicate}` counts |
+| `score_coverage` | How many images have each score type computed |
+
+Bucket edges in `dataset_service.py` and the matching frontend constants in `StatsPage.tsx` must stay in sync — both sides use the same edge arrays to compute filters when a bar is clicked.
+
+**Clickable bars → BucketPanel**: Every histogram bar carries a `filter` object in its chart-entry data. Clicking fires a `Bar.onClick` handler (recharts v3 pattern — use `Bar.onClick`, not `BarChart.onClick`) which opens a `BucketPanel` modal. The panel queries `GET /images/` with the filter params and shows up to 200 thumbnails. Quality flag cards are also clickable.
+
+**`GET /images/` filter extensions** (in `backend/routers/images.py`):
+
+| Param | Type | Effect |
+|---|---|---|
+| `score_field` | `str` | Which score column `min_score`/`max_score` apply to (whitelist-validated; defaults to `aesthetic_score`) |
+| `score_is_null` | `bool` | Filter images where `score_field IS NULL` (used for "unscored" bucket) |
+| `quality_flag` | `str` | Filter by JSON flag key in `quality_flags` (e.g. `is_blurry`) |
+| `file_size_min` / `file_size_max` | `int` | `file_size_bytes` range (bytes) |
+| `mp_min` / `mp_max` | `float` | `width × height` megapixel range |
+| `ar_min` / `ar_max` | `float` | Aspect ratio `width / height` range |
+| `format_filter` | `str` | Exact `Image.format` match (e.g. `PNG`) |
+
+**ImageLightbox**: Clicking a thumbnail in `BucketPanel` opens a full-resolution lightbox with prev/next navigation, metadata footer, a "View Details →" link to `/datasets/:datasetId/image/:imageId`, and a two-step **Delete** button. Deleting an image removes it from the panel's TanStack Query cache via `queryClient.setQueryData` (no refetch) and invalidates `dataset-stats`, `tag-stats`, and `tag-cooccurrence` queries. A per-thumbnail ×-on-hover delete button with an inline confirm overlay provides the same action from the grid.
+
 ### Styling
 
 Tailwind CSS v3 with a dark theme. Custom design tokens are in `tailwind.config.js` (`surface`, `accent`). Reusable component classes (`.btn`, `.btn-primary`, `.card`, `.input`, `.badge-*`) are defined in `frontend/src/index.css` under `@layer components`.

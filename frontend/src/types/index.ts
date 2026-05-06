@@ -23,6 +23,24 @@ export interface DatasetStats {
   aspect_ratio_distribution: Record<string, number>;
   format_distribution: Record<string, number>;
   score_distribution: Record<string, number>;
+  blur_distribution: Record<string, number>;
+  noise_distribution: Record<string, number>;
+  uniformity_distribution: Record<string, number>;
+  watermark_distribution: Record<string, number>;
+  color_distribution: Record<string, number>;
+  saturation_distribution: Record<string, number>;
+  megapixel_distribution: Record<string, number>;
+  file_size_distribution: Record<string, number>;
+  file_size_summary: Record<string, number>;
+  aspect_ratio_fine: Record<string, number>;
+  caption_length_distribution: Record<string, number>;
+  quality_flag_counts: Record<string, number>;
+  score_coverage: Record<string, number>;
+}
+
+export interface TagCooccurrence {
+  tags: string[];
+  matrix: number[][];
 }
 
 export interface ImageListItem {

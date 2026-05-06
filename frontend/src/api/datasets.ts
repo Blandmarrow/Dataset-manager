@@ -1,5 +1,5 @@
 import client from "./client";
-import type { Dataset, DatasetStats } from "../types";
+import type { Dataset, DatasetStats, TagCooccurrence } from "../types";
 
 export const datasetsApi = {
   list: () => client.get<Dataset[]>("/datasets/").then((r) => r.data),
@@ -13,4 +13,6 @@ export const datasetsApi = {
     client.post<{ job_id: string }>(`/datasets/${id}/import`, { folder_path }).then((r) => r.data),
   refreshStats: (id: string) => client.post(`/datasets/${id}/refresh-stats`),
   stats: (id: string) => client.get<DatasetStats>(`/datasets/${id}/stats`).then((r) => r.data),
+  tagCooccurrence: (id: string, limit = 15) =>
+    client.get<TagCooccurrence>(`/datasets/${id}/tag-cooccurrence?limit=${limit}`).then((r) => r.data),
 };

@@ -7,10 +7,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
 from backend.models import BackgroundJob, Dataset
-from backend.schemas.dataset import DatasetCreate, DatasetImport, DatasetOut, DatasetStats, DatasetUpdate
+from backend.schemas.dataset import DatasetCreate, DatasetImport, DatasetOut, DatasetStats, DatasetUpdate, TagCooccurrence
 from backend.services.dataset_service import (
     create_dataset,
     get_dataset_stats,
+    get_tag_cooccurrence,
     import_images_from_folder,
     refresh_stats,
 )
@@ -108,3 +109,11 @@ async def get_stats(dataset_id: str, db: AsyncSession = Depends(get_db)):
     if not stats:
         raise HTTPException(404, "Dataset not found")
     return stats
+
+
+@router.get("/{dataset_id}/tag-cooccurrence", response_model=TagCooccurrence)
+async def tag_cooccurrence(dataset_id: str, limit: int = 15, db: AsyncSession = Depends(get_db)):
+    ds = await db.get(Dataset, dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    return await get_tag_cooccurrence(db, dataset_id, limit)
