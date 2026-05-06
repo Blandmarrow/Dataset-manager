@@ -53,52 +53,64 @@ function scoreEntries(
 ): ChartEntry[] {
   return labels
     .filter((lbl) => lbl in dist)
-    .map((name, i) => ({
-      name,
-      count: dist[name],
-      filter: {
-        score_field: field,
-        min_score: i > 0 ? edges[i - 1] : undefined,
-        max_score: i < edges.length ? edges[i] : undefined,
-        sort: field,
-        order,
-      },
-    }));
+    .map((name) => {
+      const i = labels.indexOf(name);
+      return {
+        name,
+        count: dist[name],
+        filter: {
+          score_field: field,
+          min_score: i > 0 ? edges[i - 1] : undefined,
+          max_score: i < edges.length ? edges[i] : undefined,
+          sort: field,
+          order,
+        },
+      };
+    });
 }
 
 function mpEntries(dist: Record<string, number>): ChartEntry[] {
-  return MP_LABELS.filter((lbl) => lbl in dist).map((name, i) => ({
-    name,
-    count: dist[name],
-    filter: {
-      mp_min: i > 0 ? MP_EDGES[i - 1] : undefined,
-      mp_max: i < MP_EDGES.length ? MP_EDGES[i] : undefined,
-    },
-  }));
+  return MP_LABELS.filter((lbl) => lbl in dist).map((name) => {
+    const i = MP_LABELS.indexOf(name);
+    return {
+      name,
+      count: dist[name],
+      filter: {
+        mp_min: i > 0 ? MP_EDGES[i - 1] : undefined,
+        mp_max: i < MP_EDGES.length ? MP_EDGES[i] : undefined,
+      },
+    };
+  });
 }
 
 function fsEntries(dist: Record<string, number>): ChartEntry[] {
-  return FS_LABELS.filter((lbl) => lbl in dist).map((name, i) => ({
-    name,
-    count: dist[name],
-    filter: {
-      file_size_min: i > 0 ? Math.round(FS_EDGES_MB[i - 1] * 1_048_576) : undefined,
-      file_size_max: i < FS_EDGES_MB.length ? Math.round(FS_EDGES_MB[i] * 1_048_576) : undefined,
-      sort: "file_size_bytes",
-      order: "asc" as const,
-    },
-  }));
+  return FS_LABELS.filter((lbl) => lbl in dist).map((name) => {
+    const i = FS_LABELS.indexOf(name);
+    return {
+      name,
+      count: dist[name],
+      filter: {
+        file_size_min: i > 0 ? Math.round(FS_EDGES_MB[i - 1] * 1_048_576) : undefined,
+        file_size_max: i < FS_EDGES_MB.length ? Math.round(FS_EDGES_MB[i] * 1_048_576) : undefined,
+        sort: "file_size_bytes",
+        order: "asc" as const,
+      },
+    };
+  });
 }
 
 function arFineEntries(dist: Record<string, number>): ChartEntry[] {
-  return AR_LABELS.filter((lbl) => lbl in dist).map((name, i) => ({
-    name,
-    count: dist[name],
-    filter: {
-      ar_min: i > 0 ? AR_EDGES[i - 1] : undefined,
-      ar_max: i < AR_EDGES.length ? AR_EDGES[i] : undefined,
-    },
-  }));
+  return AR_LABELS.filter((lbl) => lbl in dist).map((name) => {
+    const i = AR_LABELS.indexOf(name);
+    return {
+      name,
+      count: dist[name],
+      filter: {
+        ar_min: i > 0 ? AR_EDGES[i - 1] : undefined,
+        ar_max: i < AR_EDGES.length ? AR_EDGES[i] : undefined,
+      },
+    };
+  });
 }
 
 function arCoarseEntries(dist: Record<string, number>): ChartEntry[] {
