@@ -1,4 +1,4 @@
-# SD Dataset Manager
+# Dataset-Manager
 
 A web-based application for building, curating, and exporting Stable Diffusion training datasets. Manage your image collections with AI-powered captioning, multi-metric quality scoring, and flexible export to the most common training formats.
 
