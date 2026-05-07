@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```powershell
 .\setup.ps1        # First time only — creates venv, installs deps, builds frontend
-.\start.ps1        # Production: runs migrations, builds frontend if missing, serves on :8000
+.\start.ps1        # Production: runs migrations, rebuilds frontend if any src file is newer than dist, serves on :8000
 .\start_dev.ps1    # Dev mode: backend on :8000 (hot reload) + Vite frontend on :5173
 ```
 
@@ -107,10 +107,20 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 - **`useJobSSE(jobId)`** — opens `EventSource` for one job, writes progress to `jobStore`.
 - **`useAllJobsSSE()`** — opened at app root in `TopBar`, drives the global progress bar.
 - **Job completion → cache invalidation**: pages that trigger background jobs (`QualityPage`, `SelectionToolbar`, `ImageDetailPage`) watch their job ID in `jobStore` via `useEffect` and call `qc.invalidateQueries` when status becomes `"completed"`. Always follow this pattern when adding new job-triggering UI.
+- **SelectionToolbar score modal**: the "Run Scoring" action accepts four boolean toggles — `run_technical`, `run_aesthetic`, `run_watermark` (CLIP zero-shot watermark detection), and `run_embeddings` (CLIP + DINOv2 embedding extraction for style similarity). `run_watermark` and `run_embeddings` default to `false` since they add significant VRAM/time overhead.
 
 ### Layout
 
 **Sidebar** uses `useMatch("/datasets/:datasetId/*")` (not `useParams`) to detect the active dataset, because the Sidebar renders outside the `<Routes>` tree and `useParams` would always return `{}` there.
+
+### Gallery filters
+
+`GalleryPage` supports the following filter controls:
+
+- **Search bar** — debounced 350 ms; passes `search` param to `GET /images/`; filters by filename OR caption text (case-insensitive).
+- **Caption filter** — All / Captioned / Uncaptioned.
+- **Quality flag** — dropdown with options: None, Blurry (`is_blurry`), Noisy (`is_noisy`), Near-uniform (`is_uniform`), Watermarked (`has_watermark`), Duplicate (`is_duplicate`). All values map directly to `quality_flag` param.
+- **Score filters** — multi-chip system: each active filter is a `{field, min?, max?}` chip with a × remove button. An "Add score filter" form lets the user pick any of the 8 score fields and enter optional min/max bounds. Multiple chips are combined as AND conditions via the JSON-encoded `score_filters` param. The older single `score_field`/`min_score`/`max_score` params are not used by GalleryPage (retained only for StatsPage BucketPanel backward compat).
 
 ### Gallery navigation state
 
@@ -123,15 +133,24 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 
 `ImageDetailPage` reads `gallery-nav-*` to support arrow-key navigation. When the user reaches the boundary of the current page it pre-fetches the adjacent page (`useQuery`, `enabled: atEnd / atStart`) and on crossing writes the new page's context back to `gallery-nav-*` and updates `gallery-state-*` so that **Back** returns to the correct gallery page. Arrow keys are suppressed when an `<input>` or `<textarea>` has focus.
 
+### Datasets page
+
+`DatasetsPage` uses `queryKey: ["datasets"]` with `staleTime: 0` so the list is always refetched on mount.
+
+**Preview strip**: `GET /datasets/` (`DatasetOut`) includes `preview_image_ids: list[str]` — up to 8 image IDs fetched in a single batch query alongside the datasets list. The card renders these as `<img src="/api/v1/images/{id}/thumbnail">` tiles. When a dataset has no images the strip falls back to deterministic colour gradients.
+
+**Import job tracking**: after starting an import (`POST /datasets/{id}/import`) `DatasetsPage` stores the returned `job_id` and watches it in `jobStore` via `useEffect`. The `["datasets"]` query is invalidated only when the job status becomes `"completed"` — not when the job is created — so image counts update after the import actually finishes.
+
 ### Statistics page
 
-`frontend/src/pages/StatsPage.tsx` renders the dataset analytics dashboard. It makes three queries:
+`frontend/src/pages/StatsPage.tsx` renders the dataset analytics dashboard. It makes four queries:
 
 | Query key | Source | Contents |
 |---|---|---|
 | `["dataset-stats", datasetId]` | `GET /datasets/{id}/stats` | All distributions (see schema below) |
 | `["tag-stats", datasetId]` | `GET /captions/dataset/{id}/tag-stats` | Top 500 tags with counts |
 | `["tag-cooccurrence", datasetId]` | `GET /datasets/{id}/tag-cooccurrence?limit=15` | Top-15 tag co-occurrence matrix |
+| `["score-values", datasetId]` | `GET /datasets/{id}/score-values` | Raw float arrays for all 8 score fields + `megapixels`, `file_size_mb`, `caption_words` — used for client-side histogram rebucketing |
 
 **`DatasetStats` schema** (in `backend/schemas/dataset.py`) includes these distribution dicts on top of the basic summary fields. All are computed in a single row-scan in `dataset_service.get_dataset_stats()`:
 
@@ -147,10 +166,13 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 | `file_size_summary` | `{min_mb, median_mb, p95_mb, max_mb}` |
 | `aspect_ratio_fine` | 8 common AR buckets (9:16+ → 21:9+) |
 | `caption_length_distribution` | Word count bucketed into 6 ranges |
+| `style_similarity_distribution` | 10 equal bins (0–1 range) of `style_similarity_score`, same bucketing as `watermark_distribution` |
 | `quality_flag_counts` | `{blurry, noisy, uniform, watermarked, duplicate}` counts |
 | `score_coverage` | How many images have each score type computed |
 
-Bucket edges in `dataset_service.py` and the matching frontend constants in `StatsPage.tsx` must stay in sync — both sides use the same edge arrays to compute filters when a bar is clicked.
+Default bucket edges are defined as `DEFAULT_EDGES` in `StatsPage.tsx`. Edges on the backend (`dataset_service.py`) are used only for pre-computing the initial distributions returned by `/stats`; when the user customises edges, `rebucketValues()` runs entirely client-side against the raw `score-values` arrays — no backend call needed.
+
+**Editable histograms (HistPanel)**: Every score/metric histogram has a pencil icon that opens an inline edge editor. The user types comma-separated boundary values (e.g. `"4, 6"` for aesthetic score), presses Apply or Enter, and the chart immediately rebuckets using the raw value arrays. A "custom" badge appears in the panel title when non-default edges are active; Reset restores the defaults. Aspect ratio and file format histograms are non-editable (no raw values to rebucket). When a customised bar is clicked, `BucketPanel` still opens with the correct `min`/`max` filter derived from the custom edges.
 
 **Clickable bars → BucketPanel**: Every histogram bar carries a `filter` object in its chart-entry data. Clicking fires a `Bar.onClick` handler (recharts v3 pattern — use `Bar.onClick`, not `BarChart.onClick`) which opens a `BucketPanel` modal. The panel queries `GET /images/` with the filter params and shows up to 200 thumbnails. Quality flag cards are also clickable.
 
@@ -158,8 +180,10 @@ Bucket edges in `dataset_service.py` and the matching frontend constants in `Sta
 
 | Param | Type | Effect |
 |---|---|---|
+| `search` | `str` | Case-insensitive LIKE filter across `original_filename` and `caption_text` (OR logic) |
 | `score_field` | `str` | Which score column `min_score`/`max_score` apply to (whitelist-validated; defaults to `aesthetic_score`) |
 | `score_is_null` | `bool` | Filter images where `score_field IS NULL` (used for "unscored" bucket) |
+| `score_filters` | `str` (JSON) | JSON-encoded array of `{field, min?, max?}` objects; each entry adds an AND condition; fields validated against `_ALLOWED_SCORE_FIELDS` whitelist |
 | `quality_flag` | `str` | Filter by JSON flag key in `quality_flags` (e.g. `is_blurry`) |
 | `file_size_min` / `file_size_max` | `int` | `file_size_bytes` range (bytes) |
 | `mp_min` / `mp_max` | `float` | `width × height` megapixel range |
@@ -170,4 +194,66 @@ Bucket edges in `dataset_service.py` and the matching frontend constants in `Sta
 
 ### Styling
 
-Tailwind CSS v3 with a dark theme. Custom design tokens are in `tailwind.config.js` (`surface`, `accent`). Reusable component classes (`.btn`, `.btn-primary`, `.card`, `.input`, `.badge-*`) are defined in `frontend/src/index.css` under `@layer components`.
+Tailwind CSS v3 with a dark theme. Color tokens are CSS custom properties defined in `index.css` (`:root { --bg, --surface-1/2/3, --accent, --line, --fg, --warn, --bad, --info }`) and aliased in `tailwind.config.js` so they can be used as Tailwind classes. Geist/Geist Mono fonts are loaded via Google Fonts in `index.html`. Reusable component classes are defined in `frontend/src/index.css` under `@layer components`:
+
+| Class | Purpose |
+|---|---|
+| `.btn`, `.btn.primary`, `.btn.ghost`, `.btn.danger`, `.btn.sm` | Button variants |
+| `.input`, `.select`, `.checkbox` | Form controls |
+| `.panel`, `.panel-h`, `.panel-b` | Card container with header/body sections |
+| `.form-row` | 2-col grid (200px label + 1fr control) used in CaptioningPage and ExportPage |
+| `.model-row` | Radio-style model selector row with name, description, and VRAM label |
+| `.stat-card` | Metric card with large value, label, and optional delta |
+| `.hist` / `.hist-axis` | CSS grid bar chart; set `--cols` and `gridTemplateRows: "1fr"` inline; bars use percentage `height` |
+| `.flag-card` | 3-col grid (icon, label/desc, count) for quality flags |
+| `.badge`, `.badge.dot`, `.badge.good/warn/bad/info/solid` | Semantic badge variants |
+| `.icon-btn` | 30×30 ghost icon button |
+| `.sel-bar` | Sticky bottom pill bar for selection actions |
+| `.crumbs` | Breadcrumb navigation |
+| `.nav-section`, `.nav-tail` | Sidebar section header and count badge |
+| `.tabs`, `.tab` | Tab bar with accent underline active state |
+
+**CSS hist bars**: The `.hist` class sets `display: grid; align-items: end; height: 90px`. For percentage `height` on bar children to resolve, you must also set `gridTemplateRows: "1fr"` as an inline style on the `.hist` div. Without this the single implicit row has no definite height and percentage heights collapse to 0.
+
+### System GPU stats
+
+`GET /api/v1/system/gpu` (router: `backend/routers/system.py`) returns `{ name, used_mb, total_mb, utilization_pct }` using `torch.cuda.memory_allocated()` and `torch.cuda.get_device_properties(0)`. Returns `{ name: null }` when CUDA is unavailable. The Sidebar's GPU meter (`useGpuStats` hook in `frontend/src/hooks/useGpuStats.ts`) polls this every 5 s via TanStack Query.
+
+### Captioning post-processing
+
+`CaptionJobRequest` (in `backend/routers/captioning.py`) accepts three post-processing flags:
+
+| Field | Default | Effect |
+|---|---|---|
+| `append_tags` | `true` | After generating a caption, merge existing `tags_json` into it. For tag/booru styles: deduplicate and rebuild comma-separated string. For prose styles: append existing tags as a comma-separated suffix. |
+| `strip_refusals` | `true` | Remove common AI refusal phrases from generated captions via `_REFUSAL_RE` compiled regex. |
+| `save_backup` | `false` | Before calling `set_caption`, write the existing `.txt` sidecar to `.txt.bak`. |
+
+All three captioners (Florence-2, PaliGemma-2, Ollama) emit `throughput_ips` (float, images/sec) and `vram_used_mb` (int) in every SSE progress event. Ollama always reports `vram_used_mb: 0` since Ollama manages its own VRAM.
+
+### Export page
+
+`ExportPage.tsx` supports 3 format buttons: kohya, ai-toolkit, plain folder. All three are fully implemented. The left panel uses `.form-row` layout throughout.
+
+**Filters** (applied in `export_service.py::_is_excluded()`, shared by all three formats):
+
+| Control | Param sent | Backend behaviour |
+|---|---|---|
+| Aesthetic ≥ N | `aesthetic_min: float` | Excludes images where `aesthetic_score` is NULL or below threshold |
+| Has caption | `captioned_only: bool` | Excludes images with no `caption_text` and empty `tags_json` |
+| Per-flag checkboxes (Blurry / Noisy / Near-uniform / Watermarked / Duplicate) | `exclude_flags: str` (comma-separated flag names, e.g. `"is_blurry,has_watermark"`) | Excludes images where any of the named keys in `quality_flags` JSON is truthy |
+| Style similarity ≥ N | `style_sim_min: float` | Excludes images where `style_similarity_score` is NULL or below threshold |
+
+Filter params are debounced 350 ms on the frontend; the preview query (`GET /export/preview/{dataset_id}`) reacts to changes and returns `{ will_export, total, excluded_low_aesthetic, excluded_uncaptioned, excluded_flagged, excluded_style_sim, sample_files }`.
+
+**Caption format** (`caption_format: "txt" | "caption" | "jsonl"`): controls sidecar extension for kohya/ai-toolkit; `"jsonl"` writes a single `captions.jsonl` in the output root instead of per-image sidecars. Hidden for plain folder (always writes `captions.jsonl` + `tags.csv`).
+
+**Resize** (`resize_to: int | None`): after copying/converting, resizes the longest side to the given pixel count via Pillow (only downscales; originals untouched). Skips the PIL round-trip entirely when `resize_to=None` and `output_format="original"`.
+
+**Plain folder** output structure:
+```
+output_dir/
+  images/        ← copied/converted images
+  captions.jsonl ← {"file": "name.png", "caption": "...", "tags": [...]} per line
+  tags.csv       ← file,tag rows (one row per tag per image)
+```

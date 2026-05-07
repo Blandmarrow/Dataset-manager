@@ -3,19 +3,51 @@ export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
+      fontFamily: {
+        sans: ["Geist", "ui-sans-serif", "system-ui", "sans-serif"],
+        mono: ["Geist Mono", "ui-monospace", "monospace"],
+      },
       colors: {
+        bg: "var(--bg)",
         surface: {
-          DEFAULT: "#1a1a2e",
-          card: "#16213e",
-          hover: "#0f3460",
+          DEFAULT: "var(--surface-1)",
+          2: "var(--surface-2)",
+          3: "var(--surface-3)",
+          card: "var(--surface-2)",
+          hover: "var(--surface-3)",
+        },
+        line: {
+          DEFAULT: "var(--line)",
+          2: "var(--line-2)",
+        },
+        fg: {
+          DEFAULT: "var(--fg)",
+          mute: "var(--fg-mute)",
+          dim: "var(--fg-dim)",
+          soft: "var(--fg-soft)",
         },
         accent: {
-          DEFAULT: "#e94560",
-          hover: "#c73652",
+          DEFAULT: "var(--accent)",
+          2: "var(--accent-2)",
+          deep: "var(--accent-deep)",
+          glow: "var(--accent-glow)",
+          hover: "var(--accent-2)",
         },
+        warn: { DEFAULT: "var(--warn)", bg: "var(--warn-bg)" },
+        bad: { DEFAULT: "var(--bad)", bg: "var(--bad-bg)" },
+        info: { DEFAULT: "var(--info)", bg: "var(--info-bg)" },
+      },
+      borderRadius: {
+        sm: "var(--r-sm)",
+        DEFAULT: "var(--r)",
+        lg: "var(--r-lg)",
+        xl: "var(--r-xl)",
+      },
+      boxShadow: {
+        sm: "var(--shadow-sm)",
+        lg: "var(--shadow-lg)",
       },
     },
   },
   plugins: [],
 };
-

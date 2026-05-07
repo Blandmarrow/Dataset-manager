@@ -8,6 +8,7 @@ export interface Dataset {
   image_count: number;
   captioned_count: number;
   total_size_bytes: number;
+  preview_image_ids: string[];
 }
 
 export interface DatasetStats {
@@ -34,6 +35,7 @@ export interface DatasetStats {
   file_size_summary: Record<string, number>;
   aspect_ratio_fine: Record<string, number>;
   caption_length_distribution: Record<string, number>;
+  style_similarity_distribution: Record<string, number>;
   quality_flag_counts: Record<string, number>;
   score_coverage: Record<string, number>;
 }

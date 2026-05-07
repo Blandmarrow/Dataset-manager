@@ -28,13 +28,28 @@ if ($LASTEXITCODE -ne 0) {
 Pop-Location
 Write-Host "  Migrations applied." -ForegroundColor Green
 
-# Build frontend if dist is missing or stale
-$distExists = Test-Path "$ROOT\frontend\dist\index.html"
-if (-not $distExists) {
+# Build frontend if dist is missing or any source file is newer than the last build
+$distIndex = "$ROOT\frontend\dist\index.html"
+$needsBuild = -not (Test-Path $distIndex)
+
+if (-not $needsBuild) {
+    $distTime = (Get-Item $distIndex).LastWriteTime
+    $changed = Get-ChildItem "$ROOT\frontend" -Recurse -File |
+        Where-Object { $_.FullName -notmatch '\\(node_modules|dist)\\' -and $_.LastWriteTime -gt $distTime }
+    if ($changed) { $needsBuild = $true }
+}
+
+if ($needsBuild) {
     Write-Host "Building frontend..." -ForegroundColor Yellow
     Push-Location "$ROOT\frontend"
     npm run build
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "ERROR: Frontend build failed." -ForegroundColor Red
+        Pop-Location
+        exit 1
+    }
     Pop-Location
+    Write-Host "  Frontend built." -ForegroundColor Green
 }
 
 # Launch server

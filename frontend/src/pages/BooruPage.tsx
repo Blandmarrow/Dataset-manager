@@ -1,105 +1,134 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, Tag } from "lucide-react";
+import toast from "react-hot-toast";
 import { booruApi } from "../api/booru";
-import clsx from "clsx";
 
 const CATEGORY_COLORS: Record<string, string> = {
-  character: "text-blue-400",
-  artist: "text-purple-400",
-  copyright: "text-yellow-400",
-  meta: "text-gray-400",
-  general: "text-gray-300",
+  character: "var(--info)",
+  artist: "#a78bfa",
+  copyright: "var(--warn)",
+  meta: "var(--fg-dim)",
+  general: "var(--fg-mute)",
 };
 
-const CATEGORY_BADGES: Record<string, string> = {
-  character: "badge-blue",
-  artist: "bg-purple-900/60 text-purple-300 badge",
-  copyright: "badge-yellow",
-  meta: "badge-gray",
-  general: "badge-gray",
-};
+type Source = "safebooru" | "gelbooru" | "danbooru" | "e621";
+const SOURCES: { value: Source; label: string; supported: boolean }[] = [
+  { value: "safebooru", label: "Safebooru", supported: true },
+  { value: "gelbooru",  label: "Gelbooru",  supported: true },
+  { value: "danbooru",  label: "Danbooru",  supported: false },
+  { value: "e621",      label: "e621",      supported: false },
+];
 
 export default function BooruPage() {
   const [query, setQuery] = useState("");
-  const [source, setSource] = useState<"safebooru" | "gelbooru">("safebooru");
+  const [source, setSource] = useState<Source>("safebooru");
   const [limit, setLimit] = useState(50);
   const [search, setSearch] = useState("");
 
   const { data: tags = [], isLoading, error } = useQuery({
     queryKey: ["booru-search", search, source, limit],
-    queryFn: () => booruApi.search(search, source, limit),
+    queryFn: () => booruApi.search(search, source as "safebooru" | "gelbooru", limit),
     enabled: search.length > 0,
   });
 
   const handleSearch = () => {
+    const s = SOURCES.find((s) => s.value === source);
+    if (s && !s.supported) {
+      toast(`${s.label} is not yet supported`);
+      return;
+    }
     if (query.trim()) setSearch(query.trim());
   };
 
   return (
-    <div className="p-6 space-y-5 max-w-4xl">
-      <h2 className="text-xl font-semibold flex items-center gap-2"><Tag size={20} /> Booru Tag Browser</h2>
+    <div style={{ padding: "24px 28px", overflowY: "auto", flex: 1 }}>
+      <div className="page-h" style={{ marginBottom: 20 }}>
+        <div>
+          <h1>Booru tags</h1>
+          <p>Look up tag names and post counts from image boards.</p>
+        </div>
+      </div>
 
-      {/* Search */}
-      <div className="flex gap-3">
-        <input
-          className="input flex-1"
-          placeholder="Search tags (e.g. 1girl, sword, long_hair...)"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-        />
-        <select className="input w-36" value={source} onChange={(e) => setSource(e.target.value as "safebooru" | "gelbooru")}>
-          <option value="safebooru">Safebooru</option>
-          <option value="gelbooru">Gelbooru</option>
+      {/* Search bar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+        <div className="search-wrap" style={{ flex: 1 }}>
+          <svg className="search-ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+            <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/>
+          </svg>
+          <input
+            className="input"
+            placeholder="Search tags — e.g. 1girl, sword, long_hair…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+            style={{ width: "100%" }}
+          />
+        </div>
+        <select className="select" style={{ width: 130 }} value={source} onChange={(e) => setSource(e.target.value as Source)}>
+          {SOURCES.map((s) => (
+            <option key={s.value} value={s.value}>{s.label}{!s.supported ? " *" : ""}</option>
+          ))}
         </select>
-        <select className="input w-24" value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
+        <select className="select" style={{ width: 80 }} value={limit} onChange={(e) => setLimit(Number(e.target.value))}>
           <option value={20}>20</option>
           <option value={50}>50</option>
           <option value={100}>100</option>
         </select>
-        <button className="btn-primary flex items-center gap-2" onClick={handleSearch}>
-          <Search size={14} /> Search
+        <button className="btn primary" onClick={handleSearch}>
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5l3 3"/>
+          </svg>
+          Search
         </button>
       </div>
 
-      {/* Results */}
-      {isLoading && <p className="text-gray-500">Searching {source}...</p>}
-      {error && <p className="text-red-400 text-sm">Search failed. Check your connection.</p>}
-      {!isLoading && search && tags.length === 0 && (
-        <p className="text-gray-500">No tags found for "{search}"</p>
+      {/* Empty / loading state */}
+      {!search && (
+        <div className="empty-state" style={{ marginTop: 60 }}>
+          <svg width="48" height="48" viewBox="0 0 16 16" fill="none" stroke="var(--fg-soft)" strokeWidth="1.1">
+            <circle cx="7" cy="7" r="5.5"/><path d="M11.5 11.5l3 3"/>
+          </svg>
+          <p style={{ color: "var(--fg-dim)", fontSize: 13, marginTop: 8 }}>Enter a tag query and press Search</p>
+        </div>
       )}
 
+      {isLoading && <p style={{ color: "var(--fg-mute)", fontSize: 13 }}>Searching {source}…</p>}
+      {error && <p style={{ color: "var(--bad)", fontSize: 13 }}>Search failed. Check your connection.</p>}
+      {!isLoading && search && tags.length === 0 && (
+        <p style={{ color: "var(--fg-mute)", fontSize: 13 }}>No tags found for "{search}"</p>
+      )}
+
+      {/* Results table */}
       {tags.length > 0 && (
-        <div className="card overflow-hidden">
-          <table className="w-full text-sm">
+        <div className="panel" style={{ overflow: "hidden" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
-              <tr className="border-b border-gray-700/50 text-xs text-gray-500 uppercase">
-                <th className="text-left p-3">Tag</th>
-                <th className="text-left p-3">Category</th>
-                <th className="text-right p-3">Posts</th>
-                <th className="p-3"></th>
+              <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                {["Tag", "Category", "Posts", ""].map((h) => (
+                  <th key={h} style={{ padding: "10px 14px", textAlign: h === "Posts" ? "right" : "left", fontSize: 10.5, color: "var(--fg-dim)", fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase" }}>{h}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {tags.map((tag) => (
-                <tr key={tag.tag} className="border-b border-gray-700/30 hover:bg-surface-hover transition-colors">
-                  <td className="p-3">
-                    <span className={clsx("font-mono", CATEGORY_COLORS[tag.category] ?? "text-gray-300")}>
-                      {tag.tag}
-                    </span>
+                <tr key={tag.tag} style={{ borderBottom: "1px solid var(--line)" }}
+                  onMouseEnter={(e) => (e.currentTarget as HTMLElement).style.background = "var(--surface-2)"}
+                  onMouseLeave={(e) => (e.currentTarget as HTMLElement).style.background = ""}
+                >
+                  <td style={{ padding: "9px 14px" }}>
+                    <span className="mono" style={{ color: CATEGORY_COLORS[tag.category] ?? "var(--fg-mute)", fontSize: 12.5 }}>{tag.tag}</span>
                   </td>
-                  <td className="p-3">
-                    <span className={CATEGORY_BADGES[tag.category] ?? "badge-gray"}>{tag.category}</span>
+                  <td style={{ padding: "9px 14px" }}>
+                    <span className={`badge ${tag.category === "character" ? "info" : tag.category === "copyright" ? "warn" : "solid"} dot`}>{tag.category}</span>
                   </td>
-                  <td className="p-3 text-right text-gray-400 tabular-nums">
+                  <td style={{ padding: "9px 14px", textAlign: "right", fontFamily: "Geist Mono, monospace", fontSize: 12, color: "var(--fg-mute)" }}>
                     {tag.count.toLocaleString()}
                   </td>
-                  <td className="p-3">
+                  <td style={{ padding: "9px 14px" }}>
                     <button
-                      className="btn-ghost btn-sm text-xs"
-                      onClick={() => navigator.clipboard.writeText(tag.tag)}
-                      title="Copy tag"
+                      className="btn ghost sm"
+                      style={{ fontSize: 11.5 }}
+                      onClick={() => { navigator.clipboard.writeText(tag.tag); toast.success(`Copied "${tag.tag}"`); }}
                     >
                       Copy
                     </button>
@@ -111,9 +140,12 @@ export default function BooruPage() {
         </div>
       )}
 
-      <p className="text-xs text-gray-600">
-        Tags sourced from <span className="capitalize">{source}</span>. Results cached for 5 minutes.
-      </p>
+      {search && (
+        <p style={{ marginTop: 14, fontSize: 11.5, color: "var(--fg-soft)" }}>
+          Tags sourced from <span style={{ color: "var(--fg-dim)", textTransform: "capitalize" }}>{source}</span>. Results cached for 5 minutes.
+          {SOURCES.some((s) => !s.supported) && <> · * = not yet supported</>}
+        </p>
+      )}
     </div>
   );
 }

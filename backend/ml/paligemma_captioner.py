@@ -65,10 +65,12 @@ async def caption_batch(
     target_w: int | None = None,
     target_h: int | None = None,
 ) -> list[str]:
+    import time
     from backend.workers.progress import broadcaster
 
     results = []
     total = len(image_paths)
+    start_time = time.monotonic()
 
     for i, path in enumerate(image_paths):
         try:
@@ -79,12 +81,21 @@ async def caption_batch(
         results.append(caption)
 
         if job_id:
+            elapsed = time.monotonic() - start_time
+            throughput = round((i + 1) / elapsed, 2) if elapsed > 0 else 0
+            try:
+                import torch
+                vram_mb = int(torch.cuda.memory_allocated() / 1024 / 1024) if torch.cuda.is_available() else 0
+            except Exception:
+                vram_mb = 0
             await broadcaster.emit(job_id, {
                 "type": "progress", "job_id": job_id, "job_type": "caption",
                 "status": "running", "done": i + 1, "total": total,
                 "percent": round((i + 1) / total * 100, 1),
                 "current_item": path.split("/")[-1],
                 "message": f"PaliGemma-2: {i + 1}/{total}",
+                "throughput_ips": throughput,
+                "vram_used_mb": vram_mb,
             })
 
     return results

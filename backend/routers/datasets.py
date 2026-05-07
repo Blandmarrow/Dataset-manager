@@ -1,4 +1,5 @@
 import asyncio
+from collections import defaultdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -6,11 +7,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database import get_db
-from backend.models import BackgroundJob, Dataset
+from backend.models import BackgroundJob, Dataset, Image
 from backend.schemas.dataset import DatasetCreate, DatasetImport, DatasetOut, DatasetStats, DatasetUpdate, TagCooccurrence
 from backend.services.dataset_service import (
     create_dataset,
     get_dataset_stats,
+    get_score_values,
     get_tag_cooccurrence,
     import_images_from_folder,
     refresh_stats,
@@ -23,7 +25,36 @@ router = APIRouter(prefix="/datasets", tags=["datasets"])
 @router.get("/", response_model=list[DatasetOut])
 async def list_datasets(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Dataset).order_by(Dataset.created_at.desc()))
-    return result.scalars().all()
+    datasets = result.scalars().all()
+
+    previews: defaultdict[str, list[str]] = defaultdict(list)
+    if datasets:
+        ds_ids = [ds.id for ds in datasets]
+        rows = (await db.execute(
+            select(Image.dataset_id, Image.id)
+            .where(Image.dataset_id.in_(ds_ids))
+            .order_by(Image.dataset_id, Image.created_at)
+        )).all()
+        for row in rows:
+            did, iid = row[0], row[1]
+            if len(previews[did]) < 8:
+                previews[did].append(iid)
+
+    return [
+        DatasetOut(
+            id=ds.id,
+            name=ds.name,
+            description=ds.description,
+            folder_path=ds.folder_path,
+            created_at=ds.created_at,
+            updated_at=ds.updated_at,
+            image_count=ds.image_count,
+            captioned_count=ds.captioned_count,
+            total_size_bytes=ds.total_size_bytes,
+            preview_image_ids=previews[ds.id],
+        )
+        for ds in datasets
+    ]
 
 
 @router.post("/", response_model=DatasetOut, status_code=201)
@@ -109,6 +140,14 @@ async def get_stats(dataset_id: str, db: AsyncSession = Depends(get_db)):
     if not stats:
         raise HTTPException(404, "Dataset not found")
     return stats
+
+
+@router.get("/{dataset_id}/score-values")
+async def get_score_values_endpoint(dataset_id: str, db: AsyncSession = Depends(get_db)):
+    ds = await db.get(Dataset, dataset_id)
+    if not ds:
+        raise HTTPException(404, "Dataset not found")
+    return await get_score_values(db, dataset_id)
 
 
 @router.get("/{dataset_id}/tag-cooccurrence", response_model=TagCooccurrence)

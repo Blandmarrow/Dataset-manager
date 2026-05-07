@@ -1,11 +1,12 @@
 import asyncio
+import json
 import shutil
 from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -57,6 +58,7 @@ async def list_images(
     sort: str = "created_at",
     order: str = "desc",
     captioned: bool | None = None,
+    search: str | None = None,
     min_score: float | None = None,
     max_score: float | None = None,
     score_field: str | None = None,
@@ -69,6 +71,7 @@ async def list_images(
     ar_min: float | None = None,
     ar_max: float | None = None,
     format_filter: str | None = None,
+    score_filters: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ):
     if score_field and score_field not in _ALLOWED_SCORE_FIELDS:
@@ -82,6 +85,10 @@ async def list_images(
         q = q.where(Image.caption_text != "")
     elif captioned is False:
         q = q.where(Image.caption_text == "")
+
+    if search:
+        term = f"%{search}%"
+        q = q.where(or_(Image.original_filename.ilike(term), Image.caption_text.ilike(term)))
 
     # Score filtering — score_field selects the column; defaults to aesthetic_score
     score_col = getattr(Image, score_field) if score_field else Image.aesthetic_score
@@ -113,6 +120,22 @@ async def list_images(
 
     if format_filter:
         q = q.where(Image.format == format_filter)
+
+    if score_filters:
+        try:
+            for f in json.loads(score_filters):
+                field = f.get("field", "")
+                if field not in _ALLOWED_SCORE_FIELDS:
+                    continue
+                col = getattr(Image, field)
+                mn = f.get("min")
+                mx = f.get("max")
+                if mn is not None:
+                    q = q.where(col >= float(mn))
+                if mx is not None:
+                    q = q.where(col <= float(mx))
+        except (json.JSONDecodeError, ValueError, AttributeError):
+            pass
 
     sort_col = getattr(Image, sort, Image.created_at)
     q = q.order_by(sort_col.desc() if order == "desc" else sort_col.asc())

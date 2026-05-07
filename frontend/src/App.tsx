@@ -23,11 +23,11 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <div className="flex h-screen overflow-hidden">
+        <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", height: "100vh", overflow: "hidden" }}>
           <Sidebar />
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             <TopBar />
-            <main className="flex-1 overflow-y-auto">
+            <main style={{ flex: 1, overflowY: "auto" }}>
               <Routes>
                 <Route path="/" element={<Navigate to="/datasets" replace />} />
                 <Route path="/datasets" element={<DatasetsPage />} />
@@ -45,7 +45,7 @@ export default function App() {
         <Toaster
           position="bottom-right"
           toastOptions={{
-            style: { background: "#16213e", color: "#f3f4f6", border: "1px solid #374151" },
+            style: { background: "var(--surface-2)", color: "var(--fg)", border: "1px solid var(--line-2)" },
           }}
         />
       </BrowserRouter>

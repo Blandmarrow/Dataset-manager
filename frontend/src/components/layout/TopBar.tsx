@@ -1,8 +1,67 @@
 import { useState } from "react";
-import { Power } from "lucide-react";
+import { Link, useMatch } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { datasetsApi } from "../../api/datasets";
 import { useJobStore } from "../../store/jobStore";
 import { useAllJobsSSE } from "../../hooks/useSSE";
 import ConfirmDialog from "../common/ConfirmDialog";
+
+const PAGE_LABELS: Record<string, string> = {
+  gallery: "Gallery",
+  captioning: "Captioning",
+  quality: "Score images",
+  stats: "Stats",
+  export: "Export",
+  image: "Image detail",
+};
+
+function Breadcrumbs() {
+  const dsMatch = useMatch("/datasets/:datasetId/*");
+  const datasetId = dsMatch?.params?.datasetId;
+  const rest = dsMatch?.params?.["*"] ?? "";
+  const segment = rest.split("/")[0];
+  const pageLabel = PAGE_LABELS[segment] ?? segment;
+  const isBooruMatch = useMatch("/booru");
+  const isDatasetsMatch = useMatch("/datasets");
+
+  const { data: dataset } = useQuery({
+    queryKey: ["dataset", datasetId],
+    queryFn: () => datasetsApi.get(datasetId!),
+    enabled: !!datasetId,
+    staleTime: 30_000,
+  });
+
+  if (isBooruMatch) {
+    return (
+      <div className="crumbs">
+        <Link to="/datasets">Datasets</Link>
+        <span className="sep">/</span>
+        <span className="here">Booru Browser</span>
+      </div>
+    );
+  }
+  if (isDatasetsMatch) {
+    return <div className="crumbs"><span className="here">Datasets</span></div>;
+  }
+  if (datasetId) {
+    return (
+      <div className="crumbs" style={{ minWidth: 0, overflow: "hidden" }}>
+        <Link to="/datasets">Datasets</Link>
+        <span className="sep">/</span>
+        <Link to={`/datasets/${datasetId}/gallery`} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>
+          {dataset?.name ?? "…"}
+        </Link>
+        {pageLabel && (
+          <>
+            <span className="sep">/</span>
+            <span className="here">{pageLabel}</span>
+          </>
+        )}
+      </div>
+    );
+  }
+  return <div className="crumbs"><span className="here">Dataset Manager</span></div>;
+}
 
 export default function TopBar() {
   useAllJobsSSE();
@@ -20,34 +79,49 @@ export default function TopBar() {
 
   return (
     <>
-      <header className="h-10 bg-surface-card border-b border-gray-700/50 flex items-center px-4 gap-4 shrink-0">
-        {active ? (
-          <div className="flex items-center gap-3 flex-1">
-            <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
-            <span className="text-xs text-gray-400 truncate">{active.message || active.job_type}</span>
-            <div className="flex-1 max-w-xs bg-gray-700 rounded-full h-1.5">
-              <div
-                className="bg-accent h-1.5 rounded-full transition-all duration-300"
-                style={{ width: `${active.percent ?? 0}%` }}
-              />
-            </div>
-            <span className="text-xs text-gray-500 tabular-nums">
-              {active.done ?? 0}/{active.total ?? 0}
-            </span>
+      <header style={{
+        height: 49, display: "flex", alignItems: "center", gap: 16,
+        padding: "0 20px", borderBottom: "1px solid var(--line)",
+        background: "var(--surface-1)", flexShrink: 0,
+      }}>
+        <Breadcrumbs />
+        <div style={{ flex: 1 }} />
+
+        {active && (
+          <div className="progress-pill">
+            <span className="pp-dot" />
+            <span className="pp-label">{active.message || active.job_type}</span>
+            <div className="pp-bar"><div className="pp-fill" style={{ width: `${active.percent ?? 0}%` }} /></div>
+            <span className="pp-num mono">{active.done ?? 0} / {active.total ?? 0}</span>
           </div>
-        ) : (
-          <div className="flex-1 text-xs text-gray-600">{shuttingDown ? "Server shutting down…" : "Ready"}</div>
+        )}
+        {!active && (
+          <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+            {shuttingDown ? "Shutting down…" : "Ready"}
+          </span>
         )}
         {runningJobs.length > 1 && (
-          <span className="badge-gray">{runningJobs.length} jobs</span>
+          <span className="badge solid mono">{runningJobs.length} jobs</span>
         )}
+
+        {/* Notification bell — UI only */}
+        <button className="icon-btn" title="Notifications" type="button">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+            <path d="M3.5 6.5a4.5 4.5 0 119 0v2l1.5 2H2l1.5-2v-2zM6 13a2 2 0 004 0"/>
+          </svg>
+        </button>
+
         <button
-          className="btn-ghost p-1 text-gray-500 hover:text-red-400 disabled:opacity-40"
+          className="icon-btn danger"
           title="Shut down server"
           disabled={shuttingDown}
           onClick={() => setShowConfirm(true)}
+          type="button"
+          style={{ opacity: shuttingDown ? 0.4 : 1 }}
         >
-          <Power size={15} />
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+            <path d="M8 2v6M4.5 4.5a5.5 5.5 0 107 0"/>
+          </svg>
         </button>
       </header>
 

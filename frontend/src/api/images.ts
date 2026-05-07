@@ -8,6 +8,7 @@ export interface ImageListParams {
   sort?: string;
   order?: string;
   captioned?: boolean;
+  search?: string;
   min_score?: number;
   max_score?: number;
   score_field?: string;
@@ -20,6 +21,7 @@ export interface ImageListParams {
   ar_min?: number;
   ar_max?: number;
   format_filter?: string;
+  score_filters?: string;
 }
 
 export const imagesApi = {

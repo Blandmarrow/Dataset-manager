@@ -13,6 +13,9 @@ export const captioningApi = {
     custom_prompt?: string;
     target_width?: number;
     target_height?: number;
+    append_tags?: boolean;
+    strip_refusals?: boolean;
+    save_backup?: boolean;
   }) => client.post<{ job_id: string; total: number }>("/captioning/run", params).then((r) => r.data),
   unloadModel: (model_id: string) => client.delete(`/captioning/model/${model_id}/unload`),
 };

@@ -2,19 +2,12 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ImageListItem } from "../types";
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-} from "recharts";
 import { datasetsApi } from "../api/datasets";
 import { captionsApi } from "../api/captions";
 import { imagesApi, type ImageListParams } from "../api/images";
+import type { ScoreValues } from "../api/datasets";
 
-// ─── Constants ──────────────────────────────────────────────────────────────
-const COLORS = ["#e94560", "#6366f1", "#22d3ee", "#a78bfa", "#34d399", "#fb923c"];
-const TOOLTIP_STYLE = { background: "#16213e", border: "1px solid #374151", fontSize: 12 };
-const AXIS_TICK = { fontSize: 10, fill: "#9ca3af" };
-
-// Bucket edge arrays — must mirror backend/services/dataset_service.py
+// ─── Constants ───────────────────────────────────────────────────────────────
 const BLUR_EDGES   = [20, 40, 80, 150, 300];
 const BLUR_LABELS  = ["0–20", "20–40", "40–80", "80–150", "150–300", "300+"];
 const NOISE_EDGES  = [5, 10, 15, 20, 30];
@@ -28,19 +21,42 @@ const SAT_LABELS   = ["0–10", "10–20", "20–40", "40–60", "60+"];
 const MP_EDGES     = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
 const MP_LABELS    = ["<0.25", "0.25–0.5", "0.5–1", "1–2", "2–4", "4–8", "8+"];
 const FS_EDGES_MB  = [0.1, 0.5, 1.0, 2.0, 5.0];
-const FS_LABELS    = ["<0.1 MB", "0.1–0.5 MB", "0.5–1 MB", "1–2 MB", "2–5 MB", "5+ MB"];
+const FS_LABELS    = ["<0.1 MB", "0.1–0.5", "0.5–1", "1–2", "2–5", "5+"];
 const AR_EDGES     = [0.5, 0.67, 0.85, 1.15, 1.4, 1.6, 1.95];
 const AR_LABELS    = ["9:16+", "2:3", "3:4", "1:1", "4:3", "3:2", "16:9", "21:9+"];
 
+const SCORE_GUIDE = [
+  { metric: "Aesthetic",  range: "1–10", threshold: "≥ 5.0 keep · ≥ 6.5 curated · < 4.0 reject", note: "CLIP aesthetic predictor", cls: "warn" },
+  { metric: "Watermark",  range: "0–1",  threshold: "< 0.6 clean · ≥ 0.6 exclude",                 note: "CLIP zero-shot detection",  cls: "bad"  },
+  { metric: "Blur (Lap.)",range: "0–∞",  threshold: "≥ 80 sharp",                                   note: "Laplacian variance",        cls: "info" },
+  { metric: "Noise",      range: "0–∞",  threshold: "< 15 clean",                                   note: "Smooth-region std dev",     cls: "info" },
+  { metric: "Uniformity", range: "0–∞",  threshold: "≥ 12 has detail",                              note: "Grayscale std dev",         cls: "info" },
+  { metric: "Style sim.", range: "0–1",  threshold: "≥ 0.5 consistent",                             note: "Cosine similarity",         cls: "good" },
+];
+
+const FLAG_DEFS = [
+  { key: "blurry",      flag: "is_blurry",     label: "Blurry",       hint: "Laplacian variance < 80",      cls: "warn",
+    icon: <><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.5"/></> },
+  { key: "noisy",       flag: "is_noisy",      label: "Noisy",        hint: "Smooth-region std dev > 15",   cls: "warn",
+    icon: <><path d="M3 8h1.5M5.5 5v1M8 4v1M10.5 5v1M12.5 8h-1.5M10.5 11v-1M8 12v-1M5.5 11v-1"/></> },
+  { key: "uniform",     flag: "is_uniform",    label: "Near-uniform", hint: "Grayscale std dev < 12",       cls: "info",
+    icon: <><rect x="3" y="3" width="10" height="10" rx="1"/></> },
+  { key: "watermarked", flag: "has_watermark", label: "Watermarked",  hint: "Watermark score ≥ 0.6",        cls: "bad",
+    icon: <><path d="M3 6h10M3 9h7"/></> },
+  { key: "duplicate",   flag: "is_duplicate",  label: "Duplicate",    hint: "Perceptual hash distance < 6", cls: "info",
+    icon: <><rect x="2.5" y="2.5" width="9" height="9" rx="1"/><rect x="5.5" y="5.5" width="8" height="8" rx="1"/></> },
+];
+
+const AESTHETIC_FILTER_MAP: Record<string, FilterParams> = {
+  "low (0-4)":   { min_score: 0, max_score: 4, sort: "aesthetic_score", order: "desc" },
+  "mid (4-6)":   { min_score: 4, max_score: 6, sort: "aesthetic_score", order: "desc" },
+  "high (6-10)": { min_score: 6, sort: "aesthetic_score", order: "desc" },
+  "unscored":    { score_is_null: true, sort: "created_at", order: "desc" },
+};
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 type FilterParams = Omit<ImageListParams, "dataset_id" | "page" | "limit">;
-
-interface ChartEntry {
-  name: string;
-  count: number;
-  filter?: FilterParams;
-}
-
+interface ChartEntry { name: string; count: number; filter?: FilterParams; }
 type PanelFilter = { title: string; params: FilterParams } | null;
 
 // ─── Data builders ────────────────────────────────────────────────────────────
@@ -143,12 +159,88 @@ function wmEntries(dist: Record<string, number>): ChartEntry[] {
   });
 }
 
-const AESTHETIC_FILTER_MAP: Record<string, FilterParams> = {
-  "low (0-4)":   { min_score: 0, max_score: 4, sort: "aesthetic_score", order: "desc" },
-  "mid (4-6)":   { min_score: 4, max_score: 6, sort: "aesthetic_score", order: "desc" },
-  "high (6-10)": { min_score: 6, sort: "aesthetic_score", order: "desc" },
-  "unscored":    { score_is_null: true, sort: "created_at", order: "desc" },
+function ssimEntries(dist: Record<string, number>): ChartEntry[] {
+  return Object.entries(dist).map(([name, count]) => {
+    const parts = name.split("–").map(Number);
+    return {
+      name,
+      count,
+      filter: {
+        score_field: "style_similarity_score",
+        min_score: isNaN(parts[0]) ? undefined : parts[0],
+        max_score: isNaN(parts[1]) ? undefined : parts[1],
+        sort: "style_similarity_score",
+        order: "desc" as const,
+      },
+    };
+  });
+}
+
+// ─── Rebucketing helpers ─────────────────────────────────────────────────────
+type FB = (min: number | undefined, max: number | undefined) => FilterParams | undefined;
+
+const mkScore = (field: string, order: "asc" | "desc"): FB =>
+  (min, max) => ({ score_field: field, min_score: min, max_score: max, sort: field, order });
+
+const mkMp: FB = (min, max) => ({ mp_min: min, mp_max: max });
+
+const mkFs: FB = (min, max) => ({
+  file_size_min: min !== undefined ? Math.round(min * 1_048_576) : undefined,
+  file_size_max: max !== undefined ? Math.round(max * 1_048_576) : undefined,
+  sort: "file_size_bytes",
+  order: "asc",
+});
+
+const mkNone: FB = () => undefined;
+
+const DEFAULT_EDGES: Record<string, string> = {
+  aesthetic:  "4, 6",
+  blur:       "20, 40, 80, 150, 300",
+  noise:      "5, 10, 15, 20, 30",
+  uniformity: "5, 10, 20, 40",
+  watermark:  "0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9",
+  color:      "10, 20, 40, 60",
+  saturation: "10, 20, 40, 60",
+  style_sim:  "0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9",
+  megapixels: "0.25, 0.5, 1, 2, 4, 8",
+  file_size:  "0.1, 0.5, 1, 2, 5",
+  caption_wc: "1, 6, 11, 21, 51",
 };
+
+function fmtEdge(n: number): string {
+  if (Number.isInteger(n)) return String(n);
+  return parseFloat(n.toPrecision(4)).toString();
+}
+
+function buildEdgeLabels(edges: number[]): string[] {
+  const s = [...edges].sort((a, b) => a - b);
+  return [
+    `< ${fmtEdge(s[0])}`,
+    ...s.slice(1).map((e, i) => `${fmtEdge(s[i])}–${fmtEdge(e)}`),
+    `${fmtEdge(s[s.length - 1])}+`,
+  ];
+}
+
+function rebucketValues(values: number[], edges: number[], fb: FB): ChartEntry[] {
+  const s = [...edges].sort((a, b) => a - b);
+  const labels = buildEdgeLabels(s);
+  const counts: Record<string, number> = {};
+  for (const l of labels) counts[l] = 0;
+  for (const v of values) {
+    let placed = false;
+    for (let i = 0; i < s.length; i++) {
+      if (v < s[i]) { counts[labels[i]]++; placed = true; break; }
+    }
+    if (!placed) counts[labels[s.length]]++;
+  }
+  return labels
+    .map((name, i) => ({
+      name,
+      count: counts[name],
+      filter: fb(i > 0 ? s[i - 1] : undefined, i < s.length ? s[i] : undefined),
+    }))
+    .filter(e => e.count > 0);
+}
 
 // ─── ImageLightbox ────────────────────────────────────────────────────────────
 function ImageLightbox({
@@ -173,9 +265,7 @@ function ImageLightbox({
   const prev = useCallback(() => { setConfirmDelete(false); onNavigate(index - 1); }, [index, onNavigate]);
   const next = useCallback(() => { setConfirmDelete(false); onNavigate(index + 1); }, [index, onNavigate]);
 
-  useEffect(() => {
-    setConfirmDelete(false);
-  }, [index]);
+  useEffect(() => { setConfirmDelete(false); }, [index]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -189,12 +279,8 @@ function ImageLightbox({
 
   const handleDelete = async () => {
     setDeleting(true);
-    try {
-      await onDelete(img.id);
-    } finally {
-      setDeleting(false);
-      setConfirmDelete(false);
-    }
+    try { await onDelete(img.id); }
+    finally { setDeleting(false); setConfirmDelete(false); }
   };
 
   const scores: { label: string; value: string | number | null }[] = [
@@ -207,104 +293,61 @@ function ImageLightbox({
 
   return (
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/85"
+      style={{ position: "fixed", inset: 0, zIndex: 60, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.85)" }}
       onClick={onClose}
     >
       <div
-        className="bg-[#0f1729] rounded-xl max-w-4xl w-full mx-4 flex flex-col shadow-2xl border border-gray-700 overflow-hidden"
-        style={{ maxHeight: "90vh" }}
+        style={{ background: "var(--surface-1)", borderRadius: "var(--r-xl)", maxWidth: 900, width: "100%", margin: "0 16px", display: "flex", flexDirection: "column", maxHeight: "90vh", border: "1px solid var(--line-2)", boxShadow: "var(--shadow-lg)", overflow: "hidden" }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 shrink-0 gap-3">
-          <span className="text-sm text-gray-300 truncate min-w-0" title={img.filename}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 16px", borderBottom: "1px solid var(--line)", gap: 12, flexShrink: 0 }}>
+          <span style={{ fontSize: 13, color: "var(--fg-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={img.filename}>
             {img.filename}
           </span>
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-xs text-gray-600">{index + 1} / {images.length}</span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+            <span style={{ fontSize: 11, color: "var(--fg-dim)" }}>{index + 1} / {images.length}</span>
             <Link
               to={`/datasets/${datasetId}/image/${img.id}`}
-              className="text-xs px-2 py-1 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white transition-colors"
+              style={{ fontSize: 11.5, padding: "3px 8px", borderRadius: "var(--r)", background: "var(--surface-3)", color: "var(--fg-mute)", textDecoration: "none" }}
             >
               View Details →
             </Link>
-            {/* Delete control */}
             {confirmDelete ? (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs text-red-400">Remove image?</span>
-                <button
-                  onClick={handleDelete}
-                  disabled={deleting}
-                  className="text-xs px-2 py-1 rounded bg-red-600 hover:bg-red-700 text-white disabled:opacity-50 transition-colors"
-                >
-                  {deleting ? "…" : "Remove"}
-                </button>
-                <button
-                  onClick={() => setConfirmDelete(false)}
-                  className="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
-                >
-                  Cancel
-                </button>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "var(--bad)" }}>Remove image?</span>
+                <button onClick={handleDelete} disabled={deleting} className="btn sm danger">{deleting ? "…" : "Remove"}</button>
+                <button onClick={() => setConfirmDelete(false)} className="btn sm ghost">Cancel</button>
               </div>
             ) : (
-              <button
-                onClick={() => setConfirmDelete(true)}
-                className="text-xs px-2 py-1 rounded bg-red-950 hover:bg-red-900 text-red-400 hover:text-red-300 border border-red-900 hover:border-red-700 transition-colors"
-              >
-                Delete
-              </button>
+              <button onClick={() => setConfirmDelete(true)} className="btn sm danger">Delete</button>
             )}
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-white text-xl leading-none w-7 h-7 flex items-center justify-center rounded hover:bg-gray-800"
-            >
-              ×
-            </button>
+            <button onClick={onClose} className="icon-btn" style={{ fontSize: 18 }}>×</button>
           </div>
         </div>
 
         {/* Image */}
-        <div className="relative flex items-center justify-center bg-black/40 min-h-0 flex-1 overflow-hidden">
+        <div style={{ position: "relative", display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.4)", flex: 1, overflow: "hidden", minHeight: 0 }}>
           {index > 0 && (
-            <button
-              onClick={prev}
-              className="absolute left-2 z-10 w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center text-lg transition-colors"
-            >
-              ‹
-            </button>
+            <button onClick={prev} style={{ position: "absolute", left: 8, zIndex: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 20, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>‹</button>
           )}
-          <img
-            key={img.id}
-            src={imagesApi.fileUrl(img.id)}
-            alt={img.filename}
-            className="object-contain"
-            style={{ maxHeight: "60vh", maxWidth: "100%" }}
-          />
+          <img key={img.id} src={imagesApi.fileUrl(img.id)} alt={img.filename} style={{ objectFit: "contain", maxHeight: "60vh", maxWidth: "100%" }} />
           {index < images.length - 1 && (
-            <button
-              onClick={next}
-              className="absolute right-2 z-10 w-9 h-9 rounded-full bg-black/60 hover:bg-black/80 text-white flex items-center justify-center text-lg transition-colors"
-            >
-              ›
-            </button>
+            <button onClick={next} style={{ position: "absolute", right: 8, zIndex: 10, width: 36, height: 36, borderRadius: "50%", background: "rgba(0,0,0,.6)", color: "#fff", fontSize: 20, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>›</button>
           )}
         </div>
 
-        {/* Footer — metadata */}
-        <div className="px-4 py-3 border-t border-gray-800 shrink-0 flex items-center gap-4 flex-wrap">
-          {img.width && img.height && (
-            <span className="text-xs text-gray-500">{img.width}×{img.height}</span>
-          )}
+        {/* Footer */}
+        <div style={{ padding: "10px 16px", borderTop: "1px solid var(--line)", flexShrink: 0, display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+          {img.width && img.height && <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>{img.width}×{img.height}</span>}
           {img.file_size_bytes && (
-            <span className="text-xs text-gray-500">
-              {img.file_size_bytes > 1_048_576
-                ? `${(img.file_size_bytes / 1_048_576).toFixed(1)} MB`
-                : `${Math.round(img.file_size_bytes / 1024)} KB`}
+            <span style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+              {img.file_size_bytes > 1_048_576 ? `${(img.file_size_bytes / 1_048_576).toFixed(1)} MB` : `${Math.round(img.file_size_bytes / 1024)} KB`}
             </span>
           )}
           {scores.map(({ label, value }) => (
-            <span key={label} className="text-xs text-gray-500">
-              <span className="text-gray-600">{label}:</span> {value}
+            <span key={label} style={{ fontSize: 12, color: "var(--fg-dim)" }}>
+              <span style={{ color: "var(--fg-soft)" }}>{label}:</span> {value}
             </span>
           ))}
         </div>
@@ -337,10 +380,7 @@ function BucketPanel({
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        if (confirmDeleteId) setConfirmDeleteId(null);
-        else onClose();
-      }
+      if (e.key === "Escape") { if (confirmDeleteId) setConfirmDeleteId(null); else onClose(); }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
@@ -348,110 +388,68 @@ function BucketPanel({
 
   const handleDelete = async (imageId: string) => {
     await imagesApi.delete(imageId);
-
-    // Remove from panel cache without a refetch
     const deletedIdx = images.findIndex((img) => img.id === imageId);
     const next = images.filter((img) => img.id !== imageId);
     queryClient.setQueryData<ImageListItem[]>(queryKey, next);
-
-    // Refresh stats so counts/histograms stay accurate
     queryClient.invalidateQueries({ queryKey: ["dataset-stats", datasetId] });
     queryClient.invalidateQueries({ queryKey: ["tag-stats", datasetId] });
     queryClient.invalidateQueries({ queryKey: ["tag-cooccurrence", datasetId] });
-
+    queryClient.invalidateQueries({ queryKey: ["datasets"] });
     setConfirmDeleteId(null);
-
-    // Adjust lightbox position
     if (previewIdx !== null && deletedIdx !== -1) {
-      if (next.length === 0) {
-        setPreviewIdx(null);
-      } else if (deletedIdx <= previewIdx) {
-        setPreviewIdx(Math.max(0, previewIdx - 1));
-      }
+      if (next.length === 0) setPreviewIdx(null);
+      else if (deletedIdx <= previewIdx) setPreviewIdx(Math.max(0, previewIdx - 1));
     }
   };
 
   return (
     <>
-      <div
-        className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
-        onClick={onClose}
-      >
-        <div
-          className="bg-[#0f1729] rounded-xl w-full max-w-5xl max-h-[85vh] flex flex-col mx-4 shadow-2xl border border-gray-800"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {/* Header */}
-          <div className="flex items-center justify-between px-5 py-4 border-b border-gray-800 shrink-0">
+      <div style={{ position: "fixed", inset: 0, zIndex: 50, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(0,0,0,.7)" }} onClick={onClose}>
+        <div style={{ background: "var(--surface-1)", borderRadius: "var(--r-xl)", width: "100%", maxWidth: 900, maxHeight: "85vh", display: "flex", flexDirection: "column", margin: "0 16px", border: "1px solid var(--line-2)", boxShadow: "var(--shadow-lg)" }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--line)", flexShrink: 0 }}>
             <div>
-              <h3 className="text-white font-semibold">{title}</h3>
+              <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>{title}</h3>
               {!isLoading && (
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {images.length === 200 ? "200+ images (showing first 200)" : `${images.length} image${images.length !== 1 ? "s" : ""}`}
-                  {images.length > 0 && <span className="text-gray-600"> · click any image to preview</span>}
+                <p style={{ margin: "2px 0 0", fontSize: 11.5, color: "var(--fg-mute)" }}>
+                  {images.length === 200 ? "200+ images (first 200 shown)" : `${images.length} image${images.length !== 1 ? "s" : ""}`}
+                  {images.length > 0 && <span style={{ color: "var(--fg-soft)" }}> · click to preview</span>}
                 </p>
               )}
             </div>
-            <button
-              onClick={onClose}
-              className="text-gray-400 hover:text-white text-2xl leading-none w-8 h-8 flex items-center justify-center rounded hover:bg-gray-800"
-            >
-              ×
-            </button>
+            <button onClick={onClose} className="icon-btn" style={{ fontSize: 18 }}>×</button>
           </div>
 
-          {/* Body */}
-          <div className="overflow-y-auto p-4">
+          <div style={{ overflowY: "auto", padding: 16 }}>
             {isLoading ? (
-              <div className="text-gray-500 text-sm py-16 text-center">Loading…</div>
+              <div style={{ textAlign: "center", padding: "60px 0", color: "var(--fg-mute)", fontSize: 13 }}>Loading…</div>
             ) : images.length === 0 ? (
-              <div className="text-gray-500 text-sm py-16 text-center">No images found</div>
+              <div style={{ textAlign: "center", padding: "60px 0", color: "var(--fg-mute)", fontSize: 13 }}>No images found</div>
             ) : (
-              <div className="grid grid-cols-4 sm:grid-cols-5 md:grid-cols-6 lg:grid-cols-8 gap-2">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(90px, 1fr))", gap: 6 }}>
                 {images.map((img, i) => (
-                  <div key={img.id} className="relative group aspect-square">
+                  <div key={img.id} style={{ position: "relative", aspectRatio: "1/1" }} className="group">
                     <button
-                      className="w-full h-full overflow-hidden rounded bg-gray-900 hover:ring-2 hover:ring-[#e94560] transition-all focus:outline-none focus:ring-2 focus:ring-[#e94560]"
+                      style={{ width: "100%", height: "100%", overflow: "hidden", borderRadius: "var(--r)", border: "1px solid var(--line)", background: "var(--surface-2)", cursor: "pointer", padding: 0 }}
                       onClick={() => { setConfirmDeleteId(null); setPreviewIdx(i); }}
                     >
-                      <img
-                        src={imagesApi.thumbnailUrl(img.id)}
-                        alt={img.filename}
-                        className="w-full h-full object-cover"
-                        loading="lazy"
-                      />
+                      <img src={imagesApi.thumbnailUrl(img.id)} alt={img.filename} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} loading="lazy" />
                     </button>
 
-                    {/* Delete confirm overlay */}
                     {confirmDeleteId === img.id ? (
-                      <div className="absolute inset-0 rounded bg-black/85 flex flex-col items-center justify-center gap-2 z-10">
-                        <span className="text-xs text-red-400 font-medium">Remove?</span>
-                        <div className="flex gap-1.5">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }}
-                            className="text-xs px-2 py-0.5 rounded bg-red-600 hover:bg-red-700 text-white transition-colors"
-                          >
-                            Remove
-                          </button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
-                            className="text-xs px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
-                          >
-                            Cancel
-                          </button>
+                      <div style={{ position: "absolute", inset: 0, borderRadius: "var(--r)", background: "rgba(0,0,0,.85)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 6, zIndex: 10 }}>
+                        <span style={{ fontSize: 11, color: "var(--bad)", fontWeight: 500 }}>Remove?</span>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <button onClick={(e) => { e.stopPropagation(); handleDelete(img.id); }} className="btn sm danger" style={{ fontSize: 11 }}>Yes</button>
+                          <button onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }} className="btn sm ghost" style={{ fontSize: 11 }}>No</button>
                         </div>
                       </div>
                     ) : (
-                      /* Delete button — appears on hover */
                       <button
                         onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(img.id); }}
-                        className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/70 text-white text-xs
-                                   opacity-0 group-hover:opacity-100 transition-opacity
-                                   hover:bg-red-600 flex items-center justify-center z-10"
+                        style={{ position: "absolute", top: 4, right: 4, width: 18, height: 18, borderRadius: "50%", background: "rgba(0,0,0,.7)", color: "#fff", fontSize: 12, border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", opacity: 0, transition: "opacity .15s", zIndex: 10 }}
+                        className="delete-btn"
                         title="Delete image"
-                      >
-                        ×
-                      </button>
+                      >×</button>
                     )}
                   </div>
                 ))}
@@ -475,131 +473,41 @@ function BucketPanel({
   );
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function formatSize(mb: number) {
-  return mb > 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
-}
-
-function SectionHeader({ title }: { title: string }) {
-  return <h3 className="text-base font-semibold text-gray-200 mb-3 mt-2">{title}</h3>;
-}
-
-function MiniBarChart({
-  data,
-  color = "#6366f1",
-  xAngle,
-  onBarClick,
-}: {
-  data: ChartEntry[];
-  color?: string;
-  xAngle?: number;
-  onBarClick?: (entry: ChartEntry) => void;
-}) {
-  if (!data.length)
-    return <div className="text-xs text-gray-600 py-6 text-center">No data</div>;
-
-  const clickable = !!onBarClick;
-
-  return (
-    <ResponsiveContainer width="100%" height={140}>
-      <BarChart
-        data={data}
-        margin={{ top: 4, right: 4, left: -16, bottom: xAngle ? 28 : 4 }}
-      >
-        <XAxis
-          dataKey="name"
-          tick={{ ...AXIS_TICK, angle: xAngle ?? 0, textAnchor: xAngle ? "end" : "middle" }}
-          interval={0}
-        />
-        <YAxis tick={AXIS_TICK} />
-        <Tooltip
-          contentStyle={TOOLTIP_STYLE}
-          formatter={(value) => [value, "images"]}
-          labelFormatter={(label) => label}
-          cursor={{ fill: "rgba(255,255,255,0.05)" }}
-        />
-        <Bar
-          dataKey="count"
-          fill={color}
-          radius={[2, 2, 0, 0]}
-          cursor={clickable ? "pointer" : "default"}
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          onClick={clickable ? (d: any) => { if (d?.filter) onBarClick(d as ChartEntry); } : undefined}
-        />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
-// ─── Co-occurrence heatmap ────────────────────────────────────────────────────
+// ─── CooccurrenceHeatmap ─────────────────────────────────────────────────────
 function CooccurrenceHeatmap({ tags, matrix }: { tags: string[]; matrix: number[][] }) {
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null);
-  if (!tags.length) return <div className="text-xs text-gray-600 py-4 text-center">No tag data</div>;
+  if (!tags.length) return <div style={{ fontSize: 12, color: "var(--fg-dim)", padding: "16px 0", textAlign: "center" }}>No tag data</div>;
 
   const maxOff = Math.max(1, ...matrix.flatMap((row, i) => row.filter((_, j) => i !== j)));
   const LABEL_W = 100;
   const CELL = 28;
 
   return (
-    <div className="overflow-x-auto relative">
+    <div style={{ overflowX: "auto", position: "relative" }}>
       {tooltip && (
-        <div
-          className="fixed z-50 pointer-events-none px-2 py-1 rounded text-xs bg-gray-900 border border-gray-700 text-white shadow-lg"
-          style={{ left: tooltip.x + 12, top: tooltip.y - 8 }}
-        >
+        <div style={{ position: "fixed", zIndex: 50, pointerEvents: "none", padding: "3px 8px", borderRadius: "var(--r)", fontSize: 11, background: "var(--surface-3)", border: "1px solid var(--line-2)", color: "var(--fg)", left: tooltip.x + 12, top: tooltip.y - 8 }}>
           {tooltip.text}
         </div>
       )}
       <div style={{ display: "inline-block", minWidth: LABEL_W + tags.length * CELL }}>
         <div style={{ display: "flex", marginLeft: LABEL_W }}>
           {tags.map((tag) => (
-            <div
-              key={tag}
-              style={{
-                width: CELL, minWidth: CELL, fontSize: 9, color: "#9ca3af",
-                transform: "rotate(-45deg)", transformOrigin: "bottom left",
-                height: 64, overflow: "hidden", whiteSpace: "nowrap", paddingLeft: 2,
-              }}
-            >
-              {tag}
-            </div>
+            <div key={tag} style={{ width: CELL, minWidth: CELL, fontSize: 9, color: "var(--fg-dim)", transform: "rotate(-45deg)", transformOrigin: "bottom left", height: 64, overflow: "hidden", whiteSpace: "nowrap", paddingLeft: 2 }}>{tag}</div>
           ))}
         </div>
         {tags.map((rowTag, i) => (
           <div key={rowTag} style={{ display: "flex", alignItems: "center" }}>
-            <div
-              style={{
-                width: LABEL_W, minWidth: LABEL_W, fontSize: 10, color: "#9ca3af",
-                overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
-                paddingRight: 6, textAlign: "right",
-              }}
-            >
-              {rowTag}
-            </div>
+            <div style={{ width: LABEL_W, minWidth: LABEL_W, fontSize: 10, color: "var(--fg-dim)", overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis", paddingRight: 6, textAlign: "right" }}>{rowTag}</div>
             {tags.map((colTag, j) => {
               const val = matrix[i][j];
               const isDiag = i === j;
               const opacity = isDiag ? 0.25 : val / maxOff;
-              const bg = isDiag
-                ? "rgba(99,102,241,0.35)"
-                : `rgba(233,69,96,${Math.min(opacity, 1).toFixed(2)})`;
+              const bg = isDiag ? "rgba(16,185,129,0.35)" : `rgba(79,147,214,${Math.min(opacity, 1).toFixed(2)})`;
               return (
                 <div
                   key={colTag}
-                  style={{
-                    width: CELL, minWidth: CELL, height: CELL, background: bg,
-                    border: "1px solid rgba(255,255,255,0.04)", cursor: "default",
-                    display: "flex", alignItems: "center", justifyContent: "center",
-                    fontSize: 8, color: val > 0 ? "rgba(255,255,255,0.6)" : "transparent",
-                  }}
-                  onMouseMove={(e) =>
-                    setTooltip({
-                      x: e.clientX, y: e.clientY,
-                      text: isDiag
-                        ? `${rowTag}: ${val} images`
-                        : `${rowTag} + ${colTag}: ${val} images`,
-                    })
-                  }
+                  style={{ width: CELL, minWidth: CELL, height: CELL, background: bg, border: "1px solid rgba(255,255,255,.04)", cursor: "default", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 8, color: val > 0 ? "rgba(255,255,255,.6)" : "transparent" }}
+                  onMouseMove={(e) => setTooltip({ x: e.clientX, y: e.clientY, text: isDiag ? `${rowTag}: ${val} images` : `${rowTag} + ${colTag}: ${val} images` })}
                   onMouseLeave={() => setTooltip(null)}
                 >
                   {val > 0 ? val : ""}
@@ -609,6 +517,159 @@ function CooccurrenceHeatmap({ tags, matrix }: { tags: string[]; matrix: number[
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ─── CssHist ─────────────────────────────────────────────────────────────────
+function CssHist({ entries, onBarClick }: { entries: ChartEntry[]; onBarClick?: (e: ChartEntry) => void }) {
+  if (!entries.length) return <div style={{ color: "var(--fg-dim)", fontSize: 12, padding: "24px 0", textAlign: "center" }}>No data</div>;
+  const max = Math.max(...entries.map((e) => e.count), 1);
+  const cols = entries.length;
+  return (
+    <>
+      <div className="hist" style={{ "--cols": cols, gridTemplateRows: "1fr" } as React.CSSProperties}>
+        {entries.map((e) => (
+          <div
+            key={e.name}
+            className="hist-bar"
+            style={{ height: `${Math.max(5, Math.round((e.count / max) * 100))}%` }}
+            title={`${e.name}: ${e.count.toLocaleString()}`}
+            onClick={() => e.filter && onBarClick?.(e)}
+          />
+        ))}
+      </div>
+      <div className="hist-axis" style={{ "--cols": cols } as React.CSSProperties}>
+        {entries.map((e) => <span key={e.name}>{e.name}</span>)}
+      </div>
+    </>
+  );
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function formatSize(mb: number) {
+  return mb > 1024 ? `${(mb / 1024).toFixed(1)} GB` : `${mb.toFixed(1)} MB`;
+}
+
+function meanAesthetic(dist: Record<string, number>): string {
+  const mids: Record<string, number> = { "low (0-4)": 2, "mid (4-6)": 5, "high (6-10)": 8 };
+  let sum = 0, n = 0;
+  for (const [k, c] of Object.entries(dist)) { const m = mids[k]; if (m != null) { sum += m * c; n += c; } }
+  return n > 0 ? (sum / n).toFixed(1) : "—";
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function downloadCsv(stats: any, datasetId: string) {
+  const rows: [string, string | number][] = [
+    ["dataset_id", datasetId],
+    ["image_count", stats.image_count],
+    ["caption_coverage_pct", stats.caption_coverage_pct],
+    ["total_size_mb", stats.total_size_mb],
+    ["avg_width", stats.avg_width ?? ""],
+    ["avg_height", stats.avg_height ?? ""],
+    ...Object.entries(stats.quality_flag_counts as Record<string, number>).map(([k, v]): [string, number] => [`flag_${k}`, v]),
+    ...Object.entries(stats.score_coverage as Record<string, number>).map(([k, v]): [string, number] => [`coverage_${k}`, v]),
+    ...Object.entries(stats.score_distribution as Record<string, number>).map(([k, v]): [string, number] => [`aesthetic_${k.replace(/[^a-z0-9]/gi, "_")}`, v]),
+  ];
+  const csv = rows.map(([k, v]) => `${k},${v}`).join("\n");
+  const blob = new Blob([csv], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `dataset-${datasetId}-stats.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+// ─── HistPanel ────────────────────────────────────────────────────────────────
+interface HistPanelProps {
+  title: string;
+  subtitle?: string;
+  entries: ChartEntry[];
+  onBarClick: (e: ChartEntry) => void;
+  rawValues?: number[];
+  defaultEdgeStr?: string;
+  fb?: FB;
+  footer?: React.ReactNode;
+}
+
+function HistPanel({ title, subtitle, entries, onBarClick, rawValues, defaultEdgeStr, fb, footer }: HistPanelProps) {
+  const canEdit = rawValues !== undefined && defaultEdgeStr !== undefined && fb !== undefined;
+  const [isEditing, setIsEditing] = useState(false);
+  const [activeEdgeStr, setActiveEdgeStr] = useState<string | null>(null);
+  const [draft, setDraft] = useState(defaultEdgeStr ?? "");
+  const isCustom = activeEdgeStr !== null;
+
+  const displayEntries = (() => {
+    if (!canEdit || activeEdgeStr === null) return entries;
+    const edges = activeEdgeStr.split(",").map(s => parseFloat(s.trim())).filter(n => isFinite(n));
+    if (!edges.length) return entries;
+    return rebucketValues(rawValues!, edges, fb!);
+  })();
+
+  const handleApply = () => {
+    const edges = draft.split(",").map(s => parseFloat(s.trim())).filter(n => isFinite(n));
+    if (edges.length > 0) setActiveEdgeStr(draft.trim());
+    setIsEditing(false);
+  };
+
+  const handleReset = () => {
+    setActiveEdgeStr(null);
+    setDraft(defaultEdgeStr ?? "");
+    setIsEditing(false);
+  };
+
+  return (
+    <div className="panel" style={{ padding: "14px 16px" }}>
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8, marginBottom: 4 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12, fontWeight: 500, color: "var(--fg-mute)", display: "flex", alignItems: "center", gap: 5 }}>
+            {title}
+            {isCustom && (
+              <span style={{ fontSize: 9.5, padding: "1px 5px", borderRadius: "var(--r)", background: "var(--accent)", color: "#fff", fontWeight: 600, letterSpacing: ".02em" }}>
+                custom
+              </span>
+            )}
+          </div>
+          {subtitle && !isEditing && <div style={{ fontSize: 11, color: "var(--fg-soft)", marginTop: 1 }}>{subtitle}</div>}
+        </div>
+        {canEdit && (
+          <button
+            className="icon-btn"
+            title="Edit bucket edges"
+            style={{ flexShrink: 0, opacity: 0.6 }}
+            onClick={() => { setDraft(activeEdgeStr ?? defaultEdgeStr ?? ""); setIsEditing(v => !v); }}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+              <path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"/>
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {isEditing && (
+        <div style={{ marginBottom: 8, padding: "8px 10px", background: "var(--surface-2)", borderRadius: "var(--r)", border: "1px solid var(--line)" }}>
+          <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 5 }}>Bucket edges — comma-separated numbers</div>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              className="input"
+              style={{ flex: 1, fontSize: 12 }}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => { if (e.key === "Enter") handleApply(); if (e.key === "Escape") setIsEditing(false); }}
+              placeholder="e.g. 4, 6, 8"
+              autoFocus
+            />
+            <button className="btn sm" onClick={handleApply}>Apply</button>
+            {isCustom && <button className="btn ghost sm" onClick={handleReset}>Reset</button>}
+          </div>
+        </div>
+      )}
+
+      <CssHist entries={displayEntries} onBarClick={onBarClick} />
+      {footer}
     </div>
   );
 }
@@ -636,15 +697,21 @@ export default function StatsPage() {
     enabled: !!datasetId,
   });
 
-  if (isLoading) return <div className="p-8 text-gray-500">Loading stats…</div>;
-  if (!stats) return <div className="p-8 text-gray-500">No data</div>;
+  const { data: sv } = useQuery<ScoreValues>({
+    queryKey: ["score-values", datasetId],
+    queryFn: () => datasetsApi.scoreValues(datasetId!),
+    enabled: !!datasetId,
+  });
+
+  if (isLoading) return <div style={{ padding: 40, color: "var(--fg-mute)" }}>Loading stats…</div>;
+  if (!stats) return <div style={{ padding: 40, color: "var(--fg-mute)" }}>No data</div>;
 
   // ── Chart data ──
-  const blurData    = scoreEntries(stats.blur_distribution,        BLUR_LABELS,  BLUR_EDGES,  "blur_score",        "asc");
-  const noiseData   = scoreEntries(stats.noise_distribution,       NOISE_LABELS, NOISE_EDGES, "noise_score",       "desc");
-  const uniData     = scoreEntries(stats.uniformity_distribution,  UNI_LABELS,   UNI_EDGES,   "uniformity_score",  "asc");
-  const colorData   = scoreEntries(stats.color_distribution,       COLOR_LABELS, COLOR_EDGES, "color_score",       "asc");
-  const satData     = scoreEntries(stats.saturation_distribution,  SAT_LABELS,   SAT_EDGES,   "saturation_score",  "asc");
+  const blurData      = scoreEntries(stats.blur_distribution,       BLUR_LABELS,  BLUR_EDGES,  "blur_score",       "asc");
+  const noiseData     = scoreEntries(stats.noise_distribution,      NOISE_LABELS, NOISE_EDGES, "noise_score",      "desc");
+  const uniData       = scoreEntries(stats.uniformity_distribution, UNI_LABELS,   UNI_EDGES,   "uniformity_score", "asc");
+  const colorData     = scoreEntries(stats.color_distribution,      COLOR_LABELS, COLOR_EDGES, "color_score",      "asc");
+  const satData       = scoreEntries(stats.saturation_distribution, SAT_LABELS,   SAT_EDGES,   "saturation_score", "asc");
   const watermarkData = wmEntries(stats.watermark_distribution);
   const megapixelData = mpEntries(stats.megapixel_distribution);
   const fileSizeData  = fsEntries(stats.file_size_distribution);
@@ -652,23 +719,24 @@ export default function StatsPage() {
     ? arFineEntries(stats.aspect_ratio_fine)
     : arCoarseEntries(stats.aspect_ratio_distribution);
   const aestheticData: ChartEntry[] = Object.entries(stats.score_distribution).map(([name, count]) => ({
-    name,
-    count,
-    filter: AESTHETIC_FILTER_MAP[name],
+    name, count, filter: AESTHETIC_FILTER_MAP[name],
   }));
   const formatData: ChartEntry[] = Object.entries(stats.format_distribution).map(([name, count]) => ({
-    name,
-    count,
-    filter: { format_filter: name },
+    name, count, filter: { format_filter: name },
   }));
+  const capLenData: ChartEntry[] = Object.entries(stats.caption_length_distribution).map(([name, count]) => ({ name, count }));
   const topTags = tagStats.slice(0, 20);
+  const maxTagCount = Math.max(...topTags.map((t) => t.count), 1);
+
+  const ssimData = ssimEntries(stats.style_similarity_distribution ?? {});
 
   // ── Conditional visibility ──
-  const hasQualityScores = Object.keys(stats.blur_distribution).length > 0;
-  const hasFlags    = Object.values(stats.quality_flag_counts).some((v) => v > 0);
-  const hasCoverage = Object.values(stats.score_coverage).some((v) => v > 0);
-  const hasCooccurrence = (cooccurrence?.tags.length ?? 0) > 0;
+  const hasQualityScores  = Object.keys(stats.blur_distribution).length > 0;
+  const hasFlags          = Object.values(stats.quality_flag_counts).some((v) => v > 0);
+  const hasCoverage       = Object.values(stats.score_coverage).some((v) => v > 0);
+  const hasCooccurrence   = (cooccurrence?.tags.length ?? 0) > 0;
   const fs = stats.file_size_summary;
+  const totalFlagged = Object.values(stats.quality_flag_counts).reduce((a, b) => a + b, 0);
 
   // ── Click helpers ──
   const open = (title: string) => (entry: ChartEntry) => {
@@ -676,14 +744,6 @@ export default function StatsPage() {
   };
   const openFlag = (flag: string, label: string) =>
     setPanelFilter({ title: label, params: { quality_flag: flag } });
-
-  const flagDefs = [
-    { key: "blurry",      flag: "is_blurry",     label: "Blurry",      color: "text-orange-400" },
-    { key: "noisy",       flag: "is_noisy",      label: "Noisy",       color: "text-yellow-400" },
-    { key: "uniform",     flag: "is_uniform",    label: "Uniform",     color: "text-blue-400"   },
-    { key: "watermarked", flag: "has_watermark",  label: "Watermarked", color: "text-red-400"    },
-    { key: "duplicate",   flag: "is_duplicate",  label: "Duplicate",   color: "text-purple-400" },
-  ];
 
   const coverageDefs = [
     { key: "aesthetic",  label: "Aesthetic"  },
@@ -693,224 +753,247 @@ export default function StatsPage() {
   ];
 
   return (
-    <div className="p-6 space-y-8 max-w-6xl">
-      <h2 className="text-xl font-semibold">Dataset Statistics</h2>
+    <div style={{ padding: "24px 28px", overflowY: "auto", flex: 1 }}>
+      {/* Page header */}
+      <div className="page-h" style={{ marginBottom: 20 }}>
+        <div>
+          <h1>Analytics</h1>
+          <p>Dataset quality metrics, score distributions and tag analysis.</p>
+        </div>
+        <div className="phactions">
+          <button className="btn" onClick={() => downloadCsv(stats, datasetId!)}>
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+              <path d="M8 2v8M5 7l3 3 3-3M2.5 13.5h11"/>
+            </svg>
+            Export CSV
+          </button>
+        </div>
+      </div>
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      {/* Top grid: score guide + quality flags */}
+      <div style={{ display: "grid", gridTemplateColumns: "1.35fr 1fr", gap: 14, marginBottom: 14 }}>
+        {/* Score guide */}
+        <div className="panel">
+          <div className="panel-h"><h3>Score guide</h3></div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--line)" }}>
+                  {["Metric", "Range", "Recommended threshold", "Method"].map((h) => (
+                    <th key={h} style={{ padding: "6px 16px", textAlign: "left", fontSize: 10.5, color: "var(--fg-dim)", fontWeight: 500, letterSpacing: ".04em", textTransform: "uppercase", whiteSpace: "nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {SCORE_GUIDE.map(({ metric, range, threshold, note, cls }) => (
+                  <tr key={metric} style={{ borderBottom: "1px solid var(--line)" }}>
+                    <td style={{ padding: "9px 16px", fontWeight: 500, whiteSpace: "nowrap", fontSize: 12.5 }}>{metric}</td>
+                    <td style={{ padding: "9px 16px", color: "var(--fg-dim)", fontFamily: "Geist Mono, monospace", fontSize: 11 }}>{range}</td>
+                    <td style={{ padding: "9px 16px" }}>
+                      <span className={`badge ${cls} dot`}>{threshold}</span>
+                    </td>
+                    <td style={{ padding: "9px 16px", color: "var(--fg-mute)", fontSize: 11.5 }}>{note}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Quality flags */}
+        <div className="panel">
+          <div className="panel-h">
+            <h3>Quality flags</h3>
+            <div style={{ flex: 1 }} />
+            {hasFlags && <span className="badge dot warn">{totalFlagged.toLocaleString()} flagged</span>}
+          </div>
+          <div style={{ padding: "8px 14px 14px", display: "flex", flexDirection: "column", gap: 6 }}>
+            {FLAG_DEFS.map(({ key, flag, label, hint, cls, icon }) => {
+              const n = stats.quality_flag_counts[key] ?? 0;
+              return (
+                <div
+                  key={key}
+                  className="flag-card"
+                  onClick={() => n > 0 && openFlag(flag, `${label} images`)}
+                  style={{ opacity: n === 0 ? 0.45 : 1, cursor: n === 0 ? "default" : "pointer" }}
+                >
+                  <div className={`fc-icon ${cls}`}>
+                    <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">{icon}</svg>
+                  </div>
+                  <div>
+                    <div className="fc-name">{label}</div>
+                    <div className="fc-desc">{hint}</div>
+                  </div>
+                  <span className="fc-num">{n.toLocaleString()}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 4-col stat cards */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 14 }}>
         {[
-          { label: "Total Images",    value: stats.image_count.toLocaleString() },
-          { label: "Captioned",       value: `${stats.caption_coverage_pct}%` },
-          { label: "Total Size",      value: formatSize(stats.total_size_mb) },
-          { label: "Avg Dimensions",  value: stats.avg_width ? `${Math.round(stats.avg_width)}×${Math.round(stats.avg_height!)}` : "—" },
-        ].map(({ label, value }) => (
-          <div key={label} className="card p-4 text-center">
-            <div className="text-2xl font-bold text-white">{value}</div>
-            <div className="text-xs text-gray-500 mt-1">{label}</div>
+          { k: "Total images",    v: stats.image_count.toLocaleString() },
+          { k: "Captioned",       v: `${stats.caption_coverage_pct}%` },
+          { k: "Mean aesthetic",  v: meanAesthetic(stats.score_distribution) },
+          { k: "Disk usage",      v: formatSize(stats.total_size_mb) },
+        ].map(({ k, v }) => (
+          <div key={k} className="stat-card">
+            <div className="sk">{k}</div>
+            <div className="sv">{v}</div>
           </div>
         ))}
       </div>
 
-      {/* Score coverage */}
-      {hasCoverage && (
-        <div>
-          <SectionHeader title="Scoring Coverage" />
-          <div className="flex flex-wrap gap-2">
-            {coverageDefs.map(({ key, label }) => {
-              const n = stats.score_coverage[key] ?? 0;
-              const pct = stats.image_count > 0 ? Math.round((n / stats.image_count) * 100) : 0;
-              return (
-                <div key={key} className="card px-3 py-2 flex items-center gap-2 text-sm">
-                  <span className="text-gray-400">{label}:</span>
-                  <span className="text-white font-medium">{n.toLocaleString()}</span>
-                  <span className="text-gray-500 text-xs">/ {stats.image_count.toLocaleString()} ({pct}%)</span>
-                </div>
-              );
-            })}
-          </div>
+      {/* Aesthetic score distribution */}
+      <div style={{ marginBottom: 14 }}>
+        <HistPanel
+          title="Aesthetic score distribution"
+          subtitle="Click a bar to view images in that range"
+          entries={aestheticData}
+          onBarClick={open("Aesthetic")}
+          rawValues={sv?.aesthetic_score}
+          defaultEdgeStr={DEFAULT_EDGES.aesthetic}
+          fb={mkScore("aesthetic_score", "desc")}
+        />
+      </div>
+
+      {/* Style similarity distribution */}
+      {(ssimData.length > 0 || (sv?.style_similarity_score.length ?? 0) > 0) && (
+        <div style={{ marginBottom: 14 }}>
+          <HistPanel
+            title="Style similarity distribution"
+            subtitle="Cosine similarity to reference images · higher = more consistent style · click to browse"
+            entries={ssimData}
+            onBarClick={open("Style similarity")}
+            rawValues={sv?.style_similarity_score}
+            defaultEdgeStr={DEFAULT_EDGES.style_sim}
+            fb={mkScore("style_similarity_score", "desc")}
+          />
         </div>
       )}
 
-      {/* Quality flags */}
-      {hasFlags && (
-        <div>
-          <SectionHeader title="Quality Flags" />
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            {flagDefs.map(({ key, flag, label, color }) => {
-              const n = stats.quality_flag_counts[key] ?? 0;
-              const pct = stats.image_count > 0 ? ((n / stats.image_count) * 100).toFixed(1) : "0";
-              return (
-                <button
-                  key={key}
-                  className="card p-3 text-center hover:ring-1 hover:ring-gray-600 transition-all disabled:opacity-40 disabled:cursor-default"
-                  disabled={n === 0}
-                  onClick={() => n > 0 && openFlag(flag, `${label} images`)}
-                  title={n > 0 ? `Click to view ${n} ${label.toLowerCase()} images` : undefined}
-                >
-                  <div className={`text-2xl font-bold ${color}`}>{n.toLocaleString()}</div>
-                  <div className="text-xs text-gray-500 mt-1">{label}</div>
-                  <div className="text-xs text-gray-600 mt-0.5">{pct}% of total</div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {/* Score distributions */}
+      {/* Score distributions grid */}
       {hasQualityScores && (
-        <div>
-          <SectionHeader title="Score Distributions" />
-          <p className="text-xs text-gray-600 mb-3 -mt-2">Click any bar to view the images in that range.</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {[
-              { title: "Blur Score",         subtitle: "higher = sharper", data: blurData,      color: "#22d3ee", panelTitle: "Blur score" },
-              { title: "Noise Score",        subtitle: "lower = cleaner",  data: noiseData,     color: "#a78bfa", panelTitle: "Noise score" },
-              { title: "Uniformity Score",   subtitle: "higher = detail",  data: uniData,       color: "#34d399", panelTitle: "Uniformity score" },
-              { title: "Watermark Score",    subtitle: "lower = cleaner",  data: watermarkData, color: "#e94560", panelTitle: "Watermark score" },
-              { title: "Color Richness",     subtitle: "",                 data: colorData,     color: "#fb923c", panelTitle: "Color richness" },
-              { title: "Saturation",         subtitle: "",                 data: satData,       color: "#6366f1", panelTitle: "Saturation" },
-            ].map(({ title, subtitle, data, color, panelTitle }) => (
-              <div key={title} className="card p-4">
-                <div className="text-xs font-medium text-gray-400 mb-2">
-                  {title}{subtitle && <span className="text-gray-600"> ({subtitle})</span>}
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
+          <HistPanel title="Blur score"       subtitle="higher = sharper" entries={blurData}      onBarClick={open("Blur score")}      rawValues={sv?.blur_score}        defaultEdgeStr={DEFAULT_EDGES.blur}        fb={mkScore("blur_score", "asc")} />
+          <HistPanel title="Noise score"      subtitle="lower = cleaner"  entries={noiseData}     onBarClick={open("Noise score")}     rawValues={sv?.noise_score}       defaultEdgeStr={DEFAULT_EDGES.noise}       fb={mkScore("noise_score", "desc")} />
+          <HistPanel title="Uniformity score" subtitle="higher = detail"  entries={uniData}       onBarClick={open("Uniformity score")}rawValues={sv?.uniformity_score}  defaultEdgeStr={DEFAULT_EDGES.uniformity}  fb={mkScore("uniformity_score", "asc")} />
+          <HistPanel title="Watermark score"  subtitle="lower = cleaner"  entries={watermarkData} onBarClick={open("Watermark score")} rawValues={sv?.watermark_score}   defaultEdgeStr={DEFAULT_EDGES.watermark}   fb={mkScore("watermark_score", "asc")} />
+          <HistPanel title="Color richness"                               entries={colorData}     onBarClick={open("Color richness")} rawValues={sv?.color_score}       defaultEdgeStr={DEFAULT_EDGES.color}       fb={mkScore("color_score", "asc")} />
+          <HistPanel title="Saturation"                                   entries={satData}       onBarClick={open("Saturation")}     rawValues={sv?.saturation_score}  defaultEdgeStr={DEFAULT_EDGES.saturation}  fb={mkScore("saturation_score", "asc")} />
+        </div>
+      )}
+
+      {/* Dimensions & file size */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginBottom: 14 }}>
+        <HistPanel title="Aspect ratio" entries={arData} onBarClick={open("Aspect ratio")} />
+        <HistPanel title="Megapixels"   entries={megapixelData} onBarClick={open("Megapixels")} rawValues={sv?.megapixels} defaultEdgeStr={DEFAULT_EDGES.megapixels} fb={mkMp} />
+        <HistPanel
+          title="File size"
+          entries={fileSizeData}
+          onBarClick={open("File size")}
+          rawValues={sv?.file_size_mb}
+          defaultEdgeStr={DEFAULT_EDGES.file_size}
+          fb={mkFs}
+          footer={Object.keys(fs).length > 0 ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6, marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--line)" }}>
+              {[
+                { label: "Min",    value: `${fs.min_mb?.toFixed(2)} MB`    },
+                { label: "Median", value: `${fs.median_mb?.toFixed(2)} MB` },
+                { label: "p95",    value: `${fs.p95_mb?.toFixed(2)} MB`    },
+                { label: "Max",    value: `${fs.max_mb?.toFixed(2)} MB`    },
+              ].map(({ label, value }) => (
+                <div key={label} style={{ textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "var(--fg-dim)" }}>{label}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--fg)", fontWeight: 500, marginTop: 2, fontFamily: "Geist Mono, monospace" }}>{value}</div>
                 </div>
-                <MiniBarChart
-                  data={data}
-                  color={color}
-                  xAngle={-35}
-                  onBarClick={open(panelTitle)}
-                />
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : undefined}
+        />
+      </div>
+
+      {/* Caption word count */}
+      {capLenData.length > 0 && (
+        <div style={{ marginBottom: 14 }}>
+          <HistPanel title="Caption word count" entries={capLenData} onBarClick={() => {}} rawValues={sv?.caption_words} defaultEdgeStr={DEFAULT_EDGES.caption_wc} fb={mkNone} />
         </div>
       )}
 
-      {/* Aesthetic score */}
-      <div className="card p-4">
-        <div className="text-sm font-medium text-gray-400 mb-1">Aesthetic Scores</div>
-        <p className="text-xs text-gray-600 mb-3">Click any bar to view those images.</p>
-        <ResponsiveContainer width="100%" height={160}>
-          <BarChart data={aestheticData}>
-            <XAxis dataKey="name" tick={AXIS_TICK} />
-            <YAxis tick={AXIS_TICK} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(255,255,255,0.05)" }} />
-            <Bar
-              dataKey="count"
-              fill="#6366f1"
-              radius={[2, 2, 0, 0]}
-              cursor="pointer"
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              onClick={(d: any) => { if (d?.filter) setPanelFilter({ title: `Aesthetic: ${d.name}`, params: d.filter }); }}
-            />
-          </BarChart>
-        </ResponsiveContainer>
+      {/* File formats */}
+      <div style={{ marginBottom: 14 }}>
+        <HistPanel
+          title="File formats"
+          subtitle="Click a bar to view images with that format"
+          entries={formatData}
+          onBarClick={open("Format")}
+        />
       </div>
-
-      {/* Dimensions & size */}
-      <div>
-        <SectionHeader title="Dimensions &amp; File Size" />
-        <p className="text-xs text-gray-600 mb-3 -mt-2">Click any bar to view those images.</p>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="card p-4">
-            <div className="text-xs font-medium text-gray-400 mb-2">Aspect Ratio</div>
-            <MiniBarChart data={arData} color={COLORS[0]} onBarClick={open("Aspect ratio")} />
-          </div>
-          <div className="card p-4">
-            <div className="text-xs font-medium text-gray-400 mb-2">Megapixels</div>
-            <MiniBarChart data={megapixelData} color={COLORS[2]} xAngle={-35} onBarClick={open("Megapixels")} />
-          </div>
-          <div className="card p-4">
-            <div className="text-xs font-medium text-gray-400 mb-2">File Size</div>
-            <MiniBarChart data={fileSizeData} color={COLORS[5]} xAngle={-35} onBarClick={open("File size")} />
-            {Object.keys(fs).length > 0 && (
-              <div className="grid grid-cols-2 gap-1 mt-3 pt-3 border-t border-gray-800">
-                {[
-                  { label: "Min",    value: `${fs.min_mb?.toFixed(2)} MB`    },
-                  { label: "Median", value: `${fs.median_mb?.toFixed(2)} MB` },
-                  { label: "p95",    value: `${fs.p95_mb?.toFixed(2)} MB`    },
-                  { label: "Max",    value: `${fs.max_mb?.toFixed(2)} MB`    },
-                ].map(({ label, value }) => (
-                  <div key={label} className="text-center">
-                    <div className="text-xs text-gray-500">{label}</div>
-                    <div className="text-xs text-white font-medium">{value}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Caption analytics */}
-      {Object.keys(stats.caption_length_distribution).length > 0 && (
-        <div className="card p-4">
-          <div className="text-sm font-medium text-gray-400 mb-3">Caption Word Count</div>
-          <ResponsiveContainer width="100%" height={160}>
-            <BarChart data={Object.entries(stats.caption_length_distribution).map(([name, count]) => ({ name, count }))}>
-              <XAxis dataKey="name" tick={AXIS_TICK} />
-              <YAxis tick={AXIS_TICK} />
-              <Tooltip contentStyle={TOOLTIP_STYLE} />
-              <Bar dataKey="count" radius={[2, 2, 0, 0]}>
-                {Object.keys(stats.caption_length_distribution).map((_, i) => (
-                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                ))}
-              </Bar>
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-      )}
 
       {/* Tag analytics */}
       {topTags.length > 0 && (
-        <div>
-          <SectionHeader title="Tag Analytics" />
-          <div className="card p-4 mb-4">
-            <div className="text-sm font-medium text-gray-400 mb-3">Top 20 Tags</div>
-            <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={topTags} layout="vertical">
-                <XAxis type="number" tick={AXIS_TICK} />
-                <YAxis dataKey="tag" type="category" width={130} tick={{ fontSize: 10, fill: "#9ca3af" }} />
-                <Tooltip contentStyle={TOOLTIP_STYLE} />
-                <Bar dataKey="count" fill="#22d3ee" radius={[0, 2, 2, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.4fr", gap: 14, marginBottom: 14 }}>
+          {/* Top tags — horizontal bars */}
+          <div className="panel">
+            <div className="panel-h"><h3>Top 20 tags</h3></div>
+            <div style={{ padding: "8px 16px 14px", display: "flex", flexDirection: "column", gap: 4 }}>
+              {topTags.map((t) => (
+                <div key={t.tag} style={{ display: "grid", gridTemplateColumns: "120px 1fr auto", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontSize: 11.5, color: "var(--fg-mute)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", textAlign: "right" }}>{t.tag}</span>
+                  <div style={{ height: 6, background: "var(--surface-3)", borderRadius: 3, overflow: "hidden" }}>
+                    <div style={{ height: "100%", width: `${(t.count / maxTagCount) * 100}%`, background: "linear-gradient(90deg, var(--accent-2), var(--accent))", borderRadius: 3 }} />
+                  </div>
+                  <span style={{ fontSize: 11, color: "var(--fg-dim)", fontFamily: "Geist Mono, monospace", minWidth: 36, textAlign: "right" }}>{t.count.toLocaleString()}</span>
+                </div>
+              ))}
+            </div>
           </div>
+
+          {/* Co-occurrence */}
           {hasCooccurrence && (
-            <div className="card p-4">
-              <div className="text-sm font-medium text-gray-400 mb-1">Tag Co-occurrence Matrix</div>
-              <div className="text-xs text-gray-600 mb-4">
-                Cell brightness = how often two tags appear on the same image. Diagonal = single-tag count.
+            <div className="panel">
+              <div className="panel-h">
+                <h3>Tag co-occurrence</h3>
+                <span className="mono" style={{ fontSize: 11, color: "var(--fg-dim)", marginLeft: "auto" }}>top 15 tags</span>
               </div>
-              <CooccurrenceHeatmap tags={cooccurrence!.tags} matrix={cooccurrence!.matrix} />
+              <div style={{ padding: "8px 16px 14px" }}>
+                <p style={{ margin: "0 0 10px", fontSize: 11.5, color: "var(--fg-mute)" }}>Cell brightness = how often two tags appear on the same image. Diagonal = single-tag count.</p>
+                <CooccurrenceHeatmap tags={cooccurrence!.tags} matrix={cooccurrence!.matrix} />
+              </div>
             </div>
           )}
         </div>
       )}
 
-      {/* Formats */}
-      <div className="card p-4">
-        <div className="text-sm font-medium text-gray-400 mb-1">File Formats</div>
-        <p className="text-xs text-gray-600 mb-3">Click any bar to view those images.</p>
-        <ResponsiveContainer width="100%" height={140}>
-          <BarChart data={formatData}>
-            <XAxis dataKey="name" tick={AXIS_TICK} />
-            <YAxis tick={AXIS_TICK} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} cursor={{ fill: "rgba(255,255,255,0.05)" }} />
-            <Bar
-              dataKey="count"
-              fill="#e94560"
-              radius={[2, 2, 0, 0]}
-              cursor="pointer"
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              onClick={(d: any) => { if (d?.filter) setPanelFilter({ title: `Format: ${d.name}`, params: d.filter }); }}
-            />
-          </BarChart>
-        </ResponsiveContainer>
-      </div>
+      {/* Score coverage */}
+      {hasCoverage && (
+        <div className="panel" style={{ marginBottom: 14 }}>
+          <div className="panel-h"><h3>Score coverage</h3></div>
+          <div style={{ padding: "10px 16px 14px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10 }}>
+            {coverageDefs.map(({ key, label }) => {
+              const n = stats.score_coverage[key] ?? 0;
+              const pct = stats.image_count > 0 ? Math.round((n / stats.image_count) * 100) : 0;
+              return (
+                <div key={key} style={{ background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--r)", padding: "12px 14px" }}>
+                  <div style={{ fontSize: 11, color: "var(--fg-dim)", marginBottom: 6 }}>{label}</div>
+                  <div style={{ height: 4, background: "var(--surface-3)", borderRadius: 2, overflow: "hidden", marginBottom: 8 }}>
+                    <div style={{ height: "100%", width: `${pct}%`, background: pct === 100 ? "var(--good)" : "var(--accent)", borderRadius: 2 }} />
+                  </div>
+                  <div style={{ fontSize: 11.5, fontFamily: "Geist Mono, monospace", color: "var(--fg)" }}>
+                    {n.toLocaleString()} <span style={{ color: "var(--fg-dim)" }}>/ {stats.image_count.toLocaleString()}</span>
+                  </div>
+                  <div style={{ fontSize: 10.5, color: "var(--fg-mute)", marginTop: 2 }}>{pct}% scored</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
-      {/* Bucket panel modal */}
+      {/* BucketPanel */}
       {panelFilter && (
         <BucketPanel
           title={panelFilter.title}
@@ -919,6 +1002,8 @@ export default function StatsPage() {
           onClose={() => setPanelFilter(null)}
         />
       )}
+
+      <style>{`.delete-btn { opacity: 0; } .group:hover .delete-btn { opacity: 1; }`}</style>
     </div>
   );
 }

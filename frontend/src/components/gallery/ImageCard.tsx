@@ -1,20 +1,16 @@
 import { useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, Copy, Type } from "lucide-react";
-import clsx from "clsx";
 import type { ImageListItem } from "../../types";
 import { imagesApi } from "../../api/images";
 import { useSelectionStore } from "../../store/selectionStore";
 
-function scoreColor(score: number | null) {
-  if (score === null) return "badge-gray";
-  if (score >= 6) return "badge-green";
-  if (score >= 4) return "badge-yellow";
-  return "badge-red";
+function scoreClass(score: number | null) {
+  if (score === null) return "";
+  if (score >= 6) return "good";
+  if (score >= 4) return "warn";
+  return "bad";
 }
 
-interface Props {
-  image: ImageListItem;
-}
+interface Props { image: ImageListItem; }
 
 export default function ImageCard({ image }: Props) {
   const navigate = useNavigate();
@@ -24,64 +20,110 @@ export default function ImageCard({ image }: Props) {
   const isDuplicate = image.quality_flags?.is_duplicate as boolean | undefined;
   const isBlurry = image.quality_flags?.is_blurry as boolean | undefined;
   const hasWatermark = image.quality_flags?.has_watermark as boolean | undefined;
+  const isUniform = image.quality_flags?.is_uniform as boolean | undefined;
+  const sc = image.aesthetic_score ?? null;
+  const cls = scoreClass(sc);
 
   return (
     <div
-      className={clsx(
-        "group relative rounded-lg overflow-hidden border transition-all cursor-pointer",
-        selected ? "border-accent ring-1 ring-accent" : "border-gray-700/50 hover:border-gray-500"
-      )}
+      style={{
+        border: selected ? "1px solid var(--accent)" : "1px solid var(--line)",
+        boxShadow: selected ? "0 0 0 1px var(--accent), 0 0 24px -8px var(--accent-glow)" : "none",
+        borderRadius: "var(--r-lg)",
+        overflow: "hidden",
+        background: "var(--surface-1)",
+        cursor: "pointer",
+        transition: "border-color .12s",
+        position: "relative",
+      }}
       onClick={() => navigate(`/datasets/${datasetId}/image/${image.id}`)}
+      onMouseEnter={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.borderColor = "var(--line-2)"; }}
+      onMouseLeave={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.borderColor = "var(--line)"; }}
     >
       {/* Thumbnail */}
-      <div className="aspect-square bg-surface-card relative">
+      <div style={{ aspectRatio: "1/1", background: "var(--surface-2)", position: "relative", overflow: "hidden" }}>
         <img
           src={imagesApi.thumbnailUrl(image.id)}
           alt={image.filename}
-          className="w-full h-full object-cover"
+          style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
           loading="lazy"
         />
 
-        {/* Selection checkbox */}
+        {/* Checkbox */}
         <div
-          className="absolute top-1.5 left-1.5 z-10"
+          style={{ position: "absolute", top: 8, left: 8, zIndex: 3 }}
           onClick={(e) => { e.stopPropagation(); toggle(image.id); }}
         >
-          <div className={clsx(
-            "w-5 h-5 rounded border-2 flex items-center justify-center transition-colors",
-            selected ? "bg-accent border-accent" : "bg-black/40 border-gray-400 group-hover:border-white"
-          )}>
-            {selected && <svg viewBox="0 0 12 10" fill="white" className="w-3 h-3"><path d="M1 5l3 4L11 1"/></svg>}
+          <div style={{
+            width: 18, height: 18,
+            background: selected ? "var(--accent)" : "rgba(7,9,11,.55)",
+            border: selected ? "1.5px solid var(--accent)" : "1.5px solid rgba(255,255,255,.5)",
+            borderRadius: 4,
+            display: "grid", placeContent: "center",
+            backdropFilter: "blur(4px)",
+          }}>
+            {selected && (
+              <svg viewBox="0 0 12 10" width="9" height="9" fill="none">
+                <path d="M1 5l3 4L11 1" stroke="#03130d" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
           </div>
         </div>
 
-        {/* Warning badges */}
-        {(isDuplicate === true || isBlurry === true || hasWatermark === true) && (
-          <div className="absolute top-1.5 right-1.5 flex gap-1">
-            {isDuplicate && <span title="Duplicate"><Copy size={12} className="text-yellow-400" /></span>}
-            {isBlurry && <span title="Blurry"><AlertTriangle size={12} className="text-orange-400" /></span>}
-            {hasWatermark && <span title="Watermark detected"><Type size={12} className="text-blue-400" /></span>}
+        {/* Quality flags */}
+        {(isDuplicate || isBlurry || hasWatermark || isUniform) && (
+          <div style={{ position: "absolute", top: 8, right: 8, zIndex: 3, display: "flex", gap: 4 }}>
+            {isDuplicate && (
+              <span title="Duplicate" style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(7,9,11,.7)", backdropFilter: "blur(4px)", display: "grid", placeContent: "center", border: "1px solid var(--line-2)", color: "var(--info)" }}>
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="2.5" y="2.5" width="9" height="9" rx="1"/><rect x="5.5" y="5.5" width="8" height="8" rx="1"/></svg>
+              </span>
+            )}
+            {isBlurry && (
+              <span title="Blurry" style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(7,9,11,.7)", backdropFilter: "blur(4px)", display: "grid", placeContent: "center", border: "1px solid var(--line-2)", color: "var(--warn)" }}>
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="8" cy="8" r="5.5"/><path d="M8 5v3.5"/></svg>
+              </span>
+            )}
+            {hasWatermark && (
+              <span title="Watermark" style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(7,9,11,.7)", backdropFilter: "blur(4px)", display: "grid", placeContent: "center", border: "1px solid var(--line-2)", color: "var(--info)" }}>
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M3 6h10M3 9h7"/></svg>
+              </span>
+            )}
+            {isUniform && (
+              <span title="Near-uniform" style={{ width: 18, height: 18, borderRadius: 4, background: "rgba(7,9,11,.7)", backdropFilter: "blur(4px)", display: "grid", placeContent: "center", border: "1px solid var(--line-2)", color: "var(--warn)" }}>
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6"><rect x="3" y="3" width="10" height="10"/></svg>
+              </span>
+            )}
           </div>
         )}
 
-        {/* Score badge */}
-        {image.aesthetic_score !== null && (
-          <div className="absolute bottom-1.5 right-1.5">
-            <span className={scoreColor(image.aesthetic_score)}>
-              {image.aesthetic_score?.toFixed(1)}
-            </span>
-          </div>
-        )}
+        {/* Aesthetic score badge */}
+        <div style={{ position: "absolute", bottom: 8, right: 8, zIndex: 3 }}>
+          <span style={{
+            padding: "2px 7px", borderRadius: 4,
+            font: '600 11px "Geist Mono", monospace',
+            background: "rgba(7,9,11,.75)", backdropFilter: "blur(4px)",
+            border: `1px solid ${cls === "good" ? "rgba(16,185,129,.4)" : cls === "warn" ? "rgba(210,154,58,.4)" : cls === "bad" ? "rgba(214,98,74,.4)" : "var(--line-2)"}`,
+            color: cls === "good" ? "var(--good)" : cls === "warn" ? "var(--warn)" : cls === "bad" ? "var(--bad)" : "var(--fg-dim)",
+          }}>
+            {sc !== null ? sc.toFixed(1) : "—"}
+          </span>
+        </div>
       </div>
 
       {/* Footer */}
-      <div className="p-2 space-y-1">
-        <p className="text-xs text-gray-400 truncate" title={image.filename}>{image.filename}</p>
+      <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
+        <div style={{ fontSize: 11.5, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={image.filename}>
+          {image.filename}
+        </div>
         {image.width && image.height && (
-          <p className="text-xs text-gray-600">{image.width}×{image.height}</p>
+          <div style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: "Geist Mono, monospace" }}>{image.width}×{image.height}</div>
         )}
-        {image.caption_text && (
-          <p className="text-xs text-gray-500 truncate">{image.caption_text}</p>
+        {image.caption_text ? (
+          <div style={{ fontSize: 11, color: "var(--fg-mute)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingTop: 4, borderTop: "1px dashed var(--line)", marginTop: 4 }}>
+            {image.caption_text}
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: "var(--fg-soft)", paddingTop: 4, borderTop: "1px dashed var(--line)", marginTop: 4 }}>No caption</div>
         )}
       </div>
     </div>

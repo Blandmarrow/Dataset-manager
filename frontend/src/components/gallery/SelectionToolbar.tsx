@@ -47,6 +47,8 @@ export default function SelectionToolbar({ datasetId }: Props) {
   const [captionTargetHeight, setCaptionTargetHeight] = useState<number | null>(null);
   const [runAesthetic, setRunAesthetic] = useState(true);
   const [runTechnical, setRunTechnical] = useState(true);
+  const [runWatermark, setRunWatermark] = useState(false);
+  const [runEmbeddings, setRunEmbeddings] = useState(false);
   const [scoreJobId, setScoreJobId] = useState<string | null>(null);
   const [captionJobId, setCaptionJobId] = useState<string | null>(null);
 
@@ -149,6 +151,8 @@ export default function SelectionToolbar({ datasetId }: Props) {
         image_ids: ids,
         run_aesthetic: runAesthetic,
         run_technical: runTechnical,
+        run_watermark: runWatermark,
+        run_embeddings: runEmbeddings,
       }),
     onSuccess: (data) => {
       setShowScore(false);
@@ -344,13 +348,21 @@ export default function SelectionToolbar({ datasetId }: Props) {
                 <input type="checkbox" checked={runTechnical} onChange={e => setRunTechnical(e.target.checked)} />
                 Technical (blur, noise, duplicates)
               </label>
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <input type="checkbox" checked={runWatermark} onChange={e => setRunWatermark(e.target.checked)} />
+                Watermark detection (CLIP zero-shot)
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <input type="checkbox" checked={runEmbeddings} onChange={e => setRunEmbeddings(e.target.checked)} />
+                Style embeddings (CLIP + DINOv2, for similarity)
+              </label>
             </div>
             <div className="flex gap-2 justify-end">
               <button className="btn-ghost" onClick={() => setShowScore(false)}>Cancel</button>
               <button
                 className="btn-primary flex items-center gap-2"
                 onClick={() => scoreMutation.mutate()}
-                disabled={(!runAesthetic && !runTechnical) || scoreMutation.isPending}
+                disabled={(!runAesthetic && !runTechnical && !runWatermark && !runEmbeddings) || scoreMutation.isPending}
               >
                 <Star size={14} /> Run Scoring
               </button>

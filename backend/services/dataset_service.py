@@ -176,6 +176,7 @@ async def get_dataset_stats(db: AsyncSession, dataset_id: str) -> dict:
             Image.blur_score, Image.noise_score, Image.uniformity_score,
             Image.watermark_score, Image.color_score, Image.saturation_score,
             Image.file_size_bytes, Image.quality_flags,
+            Image.style_similarity_score,
         ).where(Image.dataset_id == dataset_id)
     )
     rows = result.all()
@@ -216,6 +217,7 @@ async def get_dataset_stats(db: AsyncSession, dataset_id: str) -> dict:
     fs_dist: dict[str, int] = {}
     wc_dist: dict[str, int] = {}
 
+    ssim_dist: dict[str, int] = {}
     flag_counts = {"blurry": 0, "noisy": 0, "uniform": 0, "watermarked": 0, "duplicate": 0}
     score_cov = {"aesthetic": 0, "technical": 0, "watermark": 0}
 
@@ -288,6 +290,11 @@ async def get_dataset_stats(db: AsyncSession, dataset_id: str) -> dict:
             score_cov["watermark"] += 1
             b = _watermark_bucket(r.watermark_score)
             wm_dist[b] = wm_dist.get(b, 0) + 1
+
+        # Style similarity
+        if r.style_similarity_score is not None:
+            b = _watermark_bucket(r.style_similarity_score)
+            ssim_dist[b] = ssim_dist.get(b, 0) + 1
 
         # Quality flags
         flags = r.quality_flags or {}
@@ -363,9 +370,52 @@ async def get_dataset_stats(db: AsyncSession, dataset_id: str) -> dict:
         "file_size_summary": fs_summary,
         "aspect_ratio_fine": _ordered(ar_fine, ar_fine_order),
         "caption_length_distribution": _ordered(wc_dist, wc_labels),
+        "style_similarity_distribution": dict(sorted(ssim_dist.items())),
         "quality_flag_counts": flag_counts,
         "score_coverage": score_cov,
     }
+
+
+async def get_score_values(db: AsyncSession, dataset_id: str) -> dict:
+    result = await db.execute(
+        select(
+            Image.aesthetic_score,
+            Image.blur_score,
+            Image.noise_score,
+            Image.uniformity_score,
+            Image.watermark_score,
+            Image.color_score,
+            Image.saturation_score,
+            Image.style_similarity_score,
+            Image.width,
+            Image.height,
+            Image.file_size_bytes,
+            Image.caption_text,
+        ).where(Image.dataset_id == dataset_id)
+    )
+    rows = result.all()
+
+    score_fields = [
+        "aesthetic_score", "blur_score", "noise_score", "uniformity_score",
+        "watermark_score", "color_score", "saturation_score", "style_similarity_score",
+    ]
+    out: dict[str, list[float]] = {f: [] for f in score_fields}
+    out["megapixels"] = []
+    out["file_size_mb"] = []
+    out["caption_words"] = []
+
+    for row in rows:
+        for field in score_fields:
+            val = getattr(row, field)
+            if val is not None:
+                out[field].append(float(val))
+        if row.width and row.height:
+            out["megapixels"].append(row.width * row.height / 1_000_000)
+        if row.file_size_bytes:
+            out["file_size_mb"].append(row.file_size_bytes / 1_048_576)
+        out["caption_words"].append(len((row.caption_text or "").split()))
+
+    return out
 
 
 async def get_tag_cooccurrence(db: AsyncSession, dataset_id: str, limit: int = 15) -> dict:

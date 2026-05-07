@@ -17,7 +17,7 @@ from backend.database import init_db
 
 if settings.hf_token:
     os.environ.setdefault("HF_TOKEN", settings.hf_token)
-from backend.routers import booru, captions, captioning, datasets, export, images, jobs, quality
+from backend.routers import booru, captions, captioning, datasets, export, images, jobs, quality, system
 from backend.workers.job_queue import job_queue
 
 
@@ -53,6 +53,7 @@ app.include_router(quality.router, prefix=PREFIX)
 app.include_router(booru.router, prefix=PREFIX)
 app.include_router(export.router, prefix=PREFIX)
 app.include_router(jobs.router, prefix=PREFIX)
+app.include_router(system.router, prefix=PREFIX)
 
 @app.post("/api/v1/shutdown", status_code=204)
 async def shutdown():

@@ -91,22 +91,28 @@ async def caption_batch(
     target_w: int | None = None,
     target_h: int | None = None,
 ) -> list[str]:
+    import time
     from backend.workers.progress import broadcaster
 
     results = []
     total = len(image_paths)
+    start_time = time.monotonic()
 
     for i, path in enumerate(image_paths):
         caption = await caption_image(path, model_name, style, custom_prompt, target_w, target_h)
         results.append(caption)
 
         if job_id:
+            elapsed = time.monotonic() - start_time
+            throughput = round((i + 1) / elapsed, 2) if elapsed > 0 else 0
             await broadcaster.emit(job_id, {
                 "type": "progress", "job_id": job_id, "job_type": "caption",
                 "status": "running", "done": i + 1, "total": total,
                 "percent": round((i + 1) / total * 100, 1),
                 "current_item": path.split("/")[-1],
                 "message": f"Ollama ({model_name}): {i + 1}/{total}",
+                "throughput_ips": throughput,
+                "vram_used_mb": 0,
             })
 
     return results
