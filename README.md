@@ -35,9 +35,9 @@ Batch-caption any selection of images using one of three backends:
 
 | Model | VRAM | Notes |
 |---|---|---|
-| **Ollama** (any vision model) | varies | Points to a local Ollama instance on `localhost:11434` |
-| **Florence-2** (large / PromptGen v2) | ~5.5 GB | Styles: short, detailed, tags, dense, promptgen |
-| **PaliGemma-2 3B** (Google) | ~6 GB | Requires HuggingFace token; styles: short, detailed, tags, booru |
+| **Ollama**  | varies | Points to a local Ollama instance on `localhost:11434` |
+| **Florence-2** | ~5.5 GB | Styles: short, detailed, tags, dense, promptgen |
+| **PaliGemma-2 3B** | ~6 GB | Requires HuggingFace token; styles: short, detailed, tags, booru |
 
 Caption post-processing options:
 - Merge existing tags into the generated caption
