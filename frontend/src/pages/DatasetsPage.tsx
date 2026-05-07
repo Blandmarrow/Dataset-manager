@@ -1,8 +1,9 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { datasetsApi } from "../api/datasets";
+import { imagesApi } from "../api/images";
 import type { Dataset } from "../types";
 import ConfirmDialog from "../components/common/ConfirmDialog";
 import { useJobStore } from "../store/jobStore";
@@ -41,6 +42,8 @@ export default function DatasetsPage() {
   const [importTarget, setImportTarget] = useState<Dataset | null>(null);
   const [importPath, setImportPath] = useState("");
   const [importJobId, setImportJobId] = useState<string | null>(null);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const dragTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const importJobProgress = useJobStore((s) => s.activeJobs.get(importJobId ?? ""));
 
   useEffect(() => {
@@ -96,8 +99,54 @@ export default function DatasetsPage() {
     onError: () => toast.error("Import failed"),
   });
 
+  const handleCardDrop = useCallback(async (datasetId: string, files: FileList) => {
+    if (!files.length) return;
+    try {
+      await imagesApi.upload(datasetId, Array.from(files));
+      qc.invalidateQueries({ queryKey: ["datasets"] });
+      toast.success(`Uploaded ${files.length} image(s)`);
+    } catch {
+      toast.error("Upload failed");
+    }
+  }, [qc]);
+
+  const pageRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = pageRef.current;
+    if (!el) return;
+
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes("Files")) return;
+      e.preventDefault();
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const card = under?.closest<HTMLElement>("[data-dataset-id]");
+      const id = card?.dataset.datasetId ?? null;
+      setDragOverId(id);
+      if (dragTimerRef.current) clearTimeout(dragTimerRef.current);
+      if (id) dragTimerRef.current = setTimeout(() => setDragOverId(null), 200);
+    };
+
+    const onDrop = (e: DragEvent) => {
+      e.preventDefault();
+      if (dragTimerRef.current) { clearTimeout(dragTimerRef.current); dragTimerRef.current = null; }
+      setDragOverId(null);
+      const under = document.elementFromPoint(e.clientX, e.clientY);
+      const card = under?.closest<HTMLElement>("[data-dataset-id]");
+      const id = card?.dataset.datasetId;
+      if (id && e.dataTransfer?.files.length) handleCardDrop(id, e.dataTransfer.files);
+    };
+
+    el.addEventListener("dragover", onDragOver);
+    el.addEventListener("drop", onDrop);
+    return () => {
+      el.removeEventListener("dragover", onDragOver);
+      el.removeEventListener("drop", onDrop);
+    };
+  }, [handleCardDrop]);
+
   return (
-    <div style={{ padding: "24px 28px", overflowY: "auto", flex: 1 }}>
+    <div ref={pageRef} style={{ padding: "24px 28px", overflowY: "auto", flex: 1 }}>
       {/* Page header */}
       <div className="page-h">
         <div>
@@ -143,17 +192,40 @@ export default function DatasetsPage() {
           return (
             <div
               key={ds.id}
+              data-dataset-id={ds.id}
               style={{
-                background: "var(--surface-1)", border: "1px solid var(--line)",
+                background: "var(--surface-1)",
+                border: `1px solid ${dragOverId === ds.id ? "var(--accent)" : "var(--line)"}`,
                 borderRadius: "var(--r-lg)", overflow: "hidden",
                 cursor: "pointer", display: "flex", flexDirection: "column",
                 position: "relative", transition: "border-color .15s",
               }}
               onClick={() => navigate(`/datasets/${ds.id}/gallery`)}
-              onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--line-2)")}
-              onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.borderColor = "var(--line)")}
+              onMouseEnter={(e) => { if (dragOverId !== ds.id) (e.currentTarget as HTMLElement).style.borderColor = "var(--line-2)"; }}
+              onMouseLeave={(e) => { if (dragOverId !== ds.id) (e.currentTarget as HTMLElement).style.borderColor = "var(--line)"; }}
               className="ds-card-wrapper"
             >
+              {/* Drag-over overlay */}
+              {dragOverId === ds.id && (
+                <div style={{
+                  position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none",
+                  background: "rgba(0,0,0,0.55)", borderRadius: "var(--r-lg)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <div style={{
+                    background: "var(--surface-2)", border: "1px solid var(--accent)",
+                    borderRadius: "var(--r)", padding: "6px 14px",
+                    color: "var(--accent)", fontSize: 13, fontWeight: 600,
+                    display: "flex", alignItems: "center", gap: 6,
+                  }}>
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+                      <path d="M8 10V2M5 5l3-3 3 3M2.5 13.5h11"/>
+                    </svg>
+                    Drop to upload
+                  </div>
+                </div>
+              )}
+
               {/* Preview tile strip */}
               <div style={{ height: 110, background: "var(--surface-2)", display: "grid", gridTemplateColumns: "repeat(8, 1fr)", gridTemplateRows: "1fr", gap: 1, position: "relative" }}>
                 {(ds.preview_image_ids ?? []).length > 0

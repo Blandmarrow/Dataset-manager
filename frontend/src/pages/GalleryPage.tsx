@@ -69,6 +69,7 @@ export default function GalleryPage() {
   const [draftMin, setDraftMin] = useState("");
   const [draftMax, setDraftMax] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const sortOpt = SORT_OPTIONS[sortIdx];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -160,8 +161,21 @@ export default function GalleryPage() {
     }
   }, [datasetId, refetch, qc]);
 
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (e.dataTransfer.types.includes("Files")) {
+      e.preventDefault();
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    const related = e.relatedTarget as Node | null;
+    if (!related || !e.currentTarget.contains(related)) setIsDragOver(false);
+  };
+
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
+    setIsDragOver(false);
     if (e.dataTransfer.files.length) handleUpload(e.dataTransfer.files);
   };
 
@@ -337,12 +351,32 @@ export default function GalleryPage() {
       </div>
 
       {/* Grid */}
-      <div
-        ref={scrollRef}
-        style={{ flex: 1, overflowY: "auto", padding: "18px 28px" }}
-        onDragOver={(e) => e.preventDefault()}
-        onDrop={handleDrop}
-      >
+      <div style={{ flex: 1, position: "relative", minHeight: 0 }}>
+        {isDragOver && (
+          <div style={{
+            position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none",
+            background: "rgba(0,0,0,0.55)", border: "2px dashed var(--accent)",
+            borderRadius: "var(--r-lg)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <div style={{ textAlign: "center" }}>
+              <svg width="40" height="40" viewBox="0 0 16 16" fill="none" stroke="var(--accent)" strokeWidth="1.2">
+                <path d="M8 10V2M5 5l3-3 3 3M2.5 13.5h11"/>
+              </svg>
+              <p style={{ margin: "12px 0 0", color: "var(--accent)", fontSize: 15, fontWeight: 600 }}>
+                Drop images to upload
+              </p>
+            </div>
+          </div>
+        )}
+        <div
+          ref={scrollRef}
+          style={{ height: "100%", overflowY: "auto", padding: "18px 28px" }}
+          onDragEnter={handleDragEnter}
+          onDragOver={(e) => e.preventDefault()}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
         {isLoading ? (
           <div style={{ textAlign: "center", marginTop: 80, color: "var(--fg-mute)" }}>Loading…</div>
         ) : images.length === 0 ? (
@@ -371,6 +405,7 @@ export default function GalleryPage() {
 
         {/* Selection bar (sticky bottom within scroll area) */}
         <SelectionToolbar datasetId={datasetId!} />
+        </div>
       </div>
     </div>
   );
