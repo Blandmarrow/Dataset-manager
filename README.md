@@ -16,7 +16,7 @@ A web-based application for building, curating, and exporting Stable Diffusion t
 
 ## What it does
 
-SD Dataset Manager gives you a single interface to go from raw image folders to a clean, captioned, scored, and filtered training dataset ready to drop into Kohya SS, AI Toolkit, or any other training framework.
+Dataset-Manger gives you a single interface to go from raw image folders to a clean, captioned, scored, and filtered training dataset ready to drop into Kohya SS, AI Toolkit, or any other training framework.
 
 - **Import** images from local folders into named datasets
 - **Caption** images in batch using local ML models (Florence-2, PaliGemma-2, Ollama)
