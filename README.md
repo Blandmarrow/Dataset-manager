@@ -6,6 +6,12 @@ A web-based application for building, curating, and exporting Stable Diffusion t
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![Node](https://img.shields.io/badge/node-18%2B-green)
 
+![alt text](image.png)
+![alt text](image-1.png)
+![alt text](image-2.png)
+![alt text](image-3.png)
+![alt text](image-4.png)
+![alt text](image-5.png)
 ---
 
 ## What it does
