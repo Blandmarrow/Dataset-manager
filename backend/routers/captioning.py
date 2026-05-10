@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import re
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +16,7 @@ from backend.models import BackgroundJob, Image
 from backend.workers.job_queue import job_queue
 
 router = APIRouter(prefix="/captioning", tags=["captioning"])
+logger = logging.getLogger(__name__)
 
 _REFUSAL_RE = re.compile(
     r"(I(?:'m| am) (?:sorry|unable|not able)|I cannot|As an AI|I apologize|"
@@ -83,67 +86,109 @@ async def run_captioning(body: CaptionJobRequest, db: AsyncSession = Depends(get
     image_data = [(img.id, img.file_path, img.tags_json or []) for img in images]
 
     async def _run(job_id: str) -> None:
+        import time
         from backend.database import AsyncSessionLocal
         from backend.services.caption_service import set_caption
+        from backend.workers.progress import broadcaster
 
         is_ollama = body.model.startswith("ollama:")
         is_florence = body.model.startswith("florence2")
         is_paligemma = body.model == "paligemma2"
 
-        paths = [p for _, p, _ in image_data]
+        # Load model upfront
+        florence_entry = None
+        paligemma_entry = None
+        ollama_model_name = None
+        model_label = body.model
 
         if is_florence:
             variant = "promptgen" if "promptgen" in body.model else "large"
-            entry = await model_manager.load_florence2(variant)
-            from backend.ml.florence_captioner import caption_batch
-            captions = await caption_batch(
-                paths, entry, body.style, job_id=job_id,
-                target_w=body.target_width, target_h=body.target_height,
-            )
+            florence_entry = await model_manager.load_florence2(variant)
+            model_label = f"Florence-2 ({variant})"
         elif is_paligemma:
-            entry = await model_manager.load_paligemma2()
-            from backend.ml.paligemma_captioner import caption_batch
-            captions = await caption_batch(
-                paths, entry, body.style, job_id=job_id,
-                target_w=body.target_width, target_h=body.target_height,
-            )
+            paligemma_entry = await model_manager.load_paligemma2()
+            model_label = "PaliGemma-2"
         elif is_ollama:
-            ollama_model = body.model.removeprefix("ollama:")
-            captions = await ollama_captioner.caption_batch(
-                paths, ollama_model, body.style, body.custom_prompt, job_id=job_id,
-                target_w=body.target_width, target_h=body.target_height,
-            )
-        else:
-            captions = [""] * len(image_data)
+            ollama_model_name = body.model.removeprefix("ollama:")
+            model_label = f"Ollama ({ollama_model_name})"
+
+        total = len(image_data)
+        start_time = time.monotonic()
 
         async with AsyncSessionLocal() as session:
-            for (img_id, file_path, existing_tags), caption in zip(image_data, captions):
-                if not caption:
-                    continue
+            for i, (img_id, file_path, existing_tags) in enumerate(image_data):
+                # Check for user-initiated stop before each image
+                async with AsyncSessionLocal() as cs:
+                    job_row = await cs.get(BackgroundJob, job_id)
+                    if job_row and job_row.status == "cancelled":
+                        raise asyncio.CancelledError()
 
-                if body.strip_refusals:
-                    caption = _strip_refusals(caption)
-                if not caption:
-                    continue
+                # Generate caption for this image
+                caption = ""
+                try:
+                    if is_florence:
+                        from backend.ml.florence_captioner import caption_image as _fi
+                        caption = await _fi(file_path, florence_entry, body.style,
+                                            body.target_width, body.target_height)
+                    elif is_paligemma:
+                        from backend.ml.paligemma_captioner import caption_image as _pi
+                        caption = await _pi(file_path, paligemma_entry, body.style,
+                                            body.target_width, body.target_height)
+                    elif is_ollama:
+                        caption = await ollama_captioner.caption_image(
+                            file_path, ollama_model_name, body.style, body.custom_prompt,
+                            body.target_width, body.target_height,
+                        )
+                except Exception:
+                    logger.error("Caption failed for %s", file_path, exc_info=True)
 
-                if body.style in ("tags", "booru"):
-                    tags = [t.strip() for t in caption.split(",") if t.strip()]
-                    if body.append_tags and existing_tags:
-                        existing_set = set(tags)
-                        tags = tags + [t for t in existing_tags if t not in existing_set]
-                        caption = ", ".join(tags)
-                else:
-                    tags = []
-                    if body.append_tags and existing_tags:
-                        caption = caption.rstrip() + ", " + ", ".join(existing_tags)
+                # Save immediately if a caption was produced
+                if caption:
+                    if body.strip_refusals:
+                        caption = _strip_refusals(caption)
+                    if caption:
+                        if body.style in ("tags", "booru"):
+                            tags = [t.strip() for t in caption.split(",") if t.strip()]
+                            if body.append_tags and existing_tags:
+                                existing_set = set(tags)
+                                tags = tags + [t for t in existing_tags if t not in existing_set]
+                                caption = ", ".join(tags)
+                        else:
+                            tags = []
+                            if body.append_tags and existing_tags:
+                                caption = caption.rstrip() + ", " + ", ".join(existing_tags)
 
-                if body.save_backup:
-                    txt_path = Path(file_path).with_suffix(".txt")
-                    if txt_path.exists():
-                        bak_path = txt_path.with_suffix(".txt.bak")
-                        bak_path.write_text(txt_path.read_text(encoding="utf-8"), encoding="utf-8")
+                        if body.save_backup:
+                            txt_path = Path(file_path).with_suffix(".txt")
+                            if txt_path.exists():
+                                bak_path = txt_path.with_suffix(".txt.bak")
+                                bak_path.write_text(txt_path.read_text(encoding="utf-8"), encoding="utf-8")
 
-                await set_caption(session, img_id, caption, tags, body.style, body.model)
+                        await set_caption(session, img_id, caption, tags, body.style, body.model)
+
+                # Emit progress including image_id so the frontend can update that image
+                elapsed = time.monotonic() - start_time
+                throughput = round((i + 1) / elapsed, 2) if elapsed > 0 else 0
+                try:
+                    import torch
+                    vram_mb = int(torch.cuda.memory_allocated() / 1024 / 1024) if torch.cuda.is_available() else 0
+                except Exception:
+                    vram_mb = 0
+                filename = file_path.replace("\\", "/").split("/")[-1]
+                await broadcaster.emit(job_id, {
+                    "type": "progress",
+                    "job_id": job_id,
+                    "job_type": "caption",
+                    "status": "running",
+                    "done": i + 1,
+                    "total": total,
+                    "percent": round((i + 1) / total * 100, 1),
+                    "current_item": filename,
+                    "image_id": img_id,
+                    "message": f"{model_label}: {i + 1}/{total}",
+                    "throughput_ips": throughput,
+                    "vram_used_mb": vram_mb,
+                })
 
         from backend.services.dataset_service import refresh_stats
         async with AsyncSessionLocal() as session:

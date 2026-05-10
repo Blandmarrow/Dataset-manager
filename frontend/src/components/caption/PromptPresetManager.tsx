@@ -7,11 +7,12 @@ interface Props {
   currentStyle: string;
   currentPrompt: string;
   onLoad: (preset: PromptPreset) => void;
+  defaultOpen?: boolean;
 }
 
-export default function PromptPresetManager({ currentModel, currentStyle, currentPrompt, onLoad }: Props) {
+export default function PromptPresetManager({ currentModel, currentStyle, currentPrompt, onLoad, defaultOpen = false }: Props) {
   const { presets, save, remove } = usePresetsStore();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const [saveName, setSaveName] = useState("");
   const [saving, setSaving] = useState(false);
 

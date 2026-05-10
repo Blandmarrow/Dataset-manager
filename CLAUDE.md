@@ -107,6 +107,10 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 - **`useJobSSE(jobId)`** — opens `EventSource` for one job, writes progress to `jobStore`.
 - **`useAllJobsSSE()`** — opened at app root in `TopBar`, drives the global progress bar.
 - **Job completion → cache invalidation**: pages that trigger background jobs (`QualityPage`, `SelectionToolbar`, `ImageDetailPage`) watch their job ID in `jobStore` via `useEffect` and call `qc.invalidateQueries` when status becomes `"completed"`. Always follow this pattern when adding new job-triggering UI.
+- **Per-image cache invalidation (captioning)**: `CaptioningPage` also invalidates `["images", datasetId]` on every `jobProgress.done` increment while a caption job is running — not just on completion — so the gallery reflects each saved caption in near-real-time. Caption SSE events carry an `image_id` field for this purpose.
+- **CaptioningPage job tracking**: uses `effectiveJobId = activeJobId ?? globalCaptionJob?.job_id` where `globalCaptionJob` is found by scanning `allActiveJobs` (from `useJobStore`) for any entry with `job_type === "caption"` and `status === "running"`. This means the Stop button and progress panel work even when the user navigates away and returns, because `useAllJobsSSE` in TopBar keeps the store updated. `activeJobId` is set locally in `onSuccess` when starting a job from this page.
+- **CaptioningPage Stop button**: shown in the page header and as a full-width button in the Live progress panel whenever `canStop = !!effectiveJobId && !isDone && !isFailed && !isCancelled`. Calls `DELETE /jobs/{job_id}`.
+- **CaptioningPage Presets**: uses `usePresetsStore` directly with inline UI (no `PromptPresetManager`) — a flat list of load buttons + a save form. `PromptPresetManager` (`components/caption/PromptPresetManager.tsx`) accepts an optional `defaultOpen?: boolean` prop (used when embedding it in other pages that want it expanded by default).
 - **SelectionToolbar score modal**: the "Run Scoring" action accepts four boolean toggles — `run_technical`, `run_aesthetic`, `run_watermark` (CLIP zero-shot watermark detection), and `run_embeddings` (CLIP + DINOv2 embedding extraction for style similarity). `run_watermark` and `run_embeddings` default to `false` since they add significant VRAM/time overhead.
 
 ### Layout
@@ -132,6 +136,8 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 | `gallery-nav-${datasetId}` | `{ ids, page, sort, order, captionedFilter }` | Ordered image ID list + query context for prev/next navigation in the detail view |
 
 `ImageDetailPage` reads `gallery-nav-*` to support arrow-key navigation. When the user reaches the boundary of the current page it pre-fetches the adjacent page (`useQuery`, `enabled: atEnd / atStart`) and on crossing writes the new page's context back to `gallery-nav-*` and updates `gallery-state-*` so that **Back** returns to the correct gallery page. Arrow keys are suppressed when an `<input>` or `<textarea>` has focus.
+
+**Caption textarea auto-expand**: The caption text `<textarea>` in `ImageDetailPage` uses a `captionRef` + `useEffect` pattern to auto-size: on every `captionText` change it sets `height = "auto"` then `height = scrollHeight`. `minHeight: 8rem` keeps a reasonable baseline for short captions; `resize-none overflow-hidden` prevent manual resize handles.
 
 ### Datasets page
 
@@ -231,7 +237,13 @@ Tailwind CSS v3 with a dark theme. Color tokens are CSS custom properties define
 | `strip_refusals` | `true` | Remove common AI refusal phrases from generated captions via `_REFUSAL_RE` compiled regex. |
 | `save_backup` | `false` | Before calling `set_caption`, write the existing `.txt` sidecar to `.txt.bak`. |
 
-All three captioners (Florence-2, PaliGemma-2, Ollama) emit `throughput_ips` (float, images/sec) and `vram_used_mb` (int) in every SSE progress event. Ollama always reports `vram_used_mb: 0` since Ollama manages its own VRAM.
+**Captioning job execution**: `_run` in `routers/captioning.py` processes images one at a time — generate → save → emit — rather than batch-generating all captions first and then saving. Each SSE progress event includes `image_id` (the UUID of the just-captioned image) in addition to the standard progress fields. This means captions are committed to the DB and sidecar as each image finishes, not all at once at the end.
+
+All three captioners (Florence-2, PaliGemma-2, Ollama) emit `throughput_ips` (float, images/sec), `vram_used_mb` (int), and `image_id` (str) in every SSE progress event. Ollama always reports `vram_used_mb: 0` since Ollama manages its own VRAM.
+
+**Captioning job cancellation**: `_run` opens a fresh `AsyncSessionLocal` at the start of each per-image iteration and checks the job's DB `status`. If the status is `"cancelled"` (set by `DELETE /jobs/{job_id}`), it raises `asyncio.CancelledError`, which the job worker catches to mark the job cancelled and emit the SSE close event. Cancellation therefore takes effect at the next image boundary, not mid-inference. The `DELETE /jobs/{job_id}` endpoint in `routers/jobs.py` handles setting the DB status; no changes to the job queue were needed.
+
+**Ollama timeout**: `httpx.AsyncClient` in `ollama_captioner.py` uses a 300-second timeout per image to accommodate slow hardware and cold model loads.
 
 ### Export page
 

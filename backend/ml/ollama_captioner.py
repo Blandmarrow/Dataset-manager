@@ -65,7 +65,7 @@ async def caption_image(
     )
 
     try:
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             resp = await client.post(
                 f"{settings.ollama_base_url}/api/generate",
                 json={
@@ -78,7 +78,7 @@ async def caption_image(
             resp.raise_for_status()
             return resp.json().get("response", "").strip()
     except Exception as e:
-        logger.error("Ollama error on %s: %s", image_path, e)
+        logger.error("Ollama error on %s: %r", image_path, e, exc_info=True)
         return ""
 
 

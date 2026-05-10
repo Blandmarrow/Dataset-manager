@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight, Save, Crop, AlertTriangle, Copy, Sparkles, ChevronDown, ChevronUp, Type } from "lucide-react";
@@ -41,6 +41,7 @@ export default function ImageDetailPage() {
   const [tags, setTags] = useState<string[]>([]);
   const [captionText, setCaptionText] = useState("");
   const [captionStyle, setCaptionStyle] = useState("");
+  const captionRef = useRef<HTMLTextAreaElement>(null);
   const [captionDirty, setCaptionDirty] = useState(false);
   const [cropMode, setCropMode] = useState(false);
   const [crop, setCrop] = useState({ x: 0, y: 0 });
@@ -197,6 +198,13 @@ export default function ImageDetailPage() {
       setCaptionStyle(captionData.caption_style);
     }
   }, [captionData]);
+
+  useEffect(() => {
+    const el = captionRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [captionText]);
 
   const saveMutation = useMutation({
     mutationFn: () => captionsApi.update(imageId!, { caption_text: captionText, tags, caption_style: captionStyle }),
@@ -426,7 +434,9 @@ export default function ImageDetailPage() {
           <div>
             <label className="label">Caption Text</label>
             <textarea
-              className="input h-32 resize-y"
+              ref={captionRef}
+              className="input resize-none overflow-hidden"
+              style={{ minHeight: "8rem" }}
               value={captionText}
               onChange={(e) => { setCaptionText(e.target.value); setCaptionDirty(true); }}
               placeholder="Natural language description..."

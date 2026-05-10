@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { captioningApi } from "../api/captioning";
+import { jobsApi } from "../api/jobs";
 import { datasetsApi } from "../api/datasets";
 import { useJobSSE } from "../hooks/useSSE";
 import { useJobStore } from "../store/jobStore";
 import { useSelectionStore } from "../store/selectionStore";
+import { usePresetsStore } from "../store/promptPresetsStore";
 import ResolutionPicker from "../components/caption/ResolutionPicker";
 import type { ModelInfo, OllamaModel } from "../types";
 
@@ -22,6 +24,7 @@ export default function CaptioningPage() {
   const { datasetId } = useParams<{ datasetId: string }>();
   const qc = useQueryClient();
   const { selectedIds, count: selCount } = useSelectionStore();
+  const { presets, save: savePreset, remove: removePreset } = usePresetsStore();
 
   const [selectedModel, setSelectedModel] = useState("");
   const [ollamaModelInput, setOllamaModelInput] = useState("");
@@ -34,9 +37,21 @@ export default function CaptioningPage() {
   const [stripRefusals, setStripRefusals] = useState(true);
   const [saveBackup, setSaveBackup] = useState(false);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [savingPreset, setSavingPreset] = useState(false);
+  const [presetName, setPresetName] = useState("");
 
-  useJobSSE(activeJobId);
-  const jobProgress = useJobStore((s) => s.activeJobs.get(activeJobId ?? ""));
+  // Scan the global job store (fed by TopBar's useAllJobsSSE) to detect caption
+  // jobs started before this component mounted (e.g. user navigated back).
+  const allActiveJobs = useJobStore((s) => s.activeJobs);
+  const globalCaptionJob = !activeJobId
+    ? Array.from(allActiveJobs.values()).find(
+        (j) => (j as any).job_type === "caption" && j.status === "running"
+      )
+    : undefined;
+  const effectiveJobId = activeJobId ?? globalCaptionJob?.job_id ?? null;
+
+  useJobSSE(effectiveJobId);
+  const jobProgress = useJobStore((s) => s.activeJobs.get(effectiveJobId ?? ""));
 
   const { data: modelsData, isLoading } = useQuery({
     queryKey: ["captioning-models"],
@@ -87,10 +102,42 @@ export default function CaptioningPage() {
     onError: () => toast.error("Failed to start captioning"),
   });
 
+  const cancelMutation = useMutation({
+    mutationFn: () => jobsApi.cancel(effectiveJobId!),
+    onSuccess: () => toast.success("Captioning stopped"),
+    onError: () => toast.error("Failed to stop captioning"),
+  });
+
+  useEffect(() => {
+    if (jobProgress?.status === "completed") {
+      qc.invalidateQueries({ queryKey: ["images", datasetId] });
+      qc.invalidateQueries({ queryKey: ["dataset", datasetId] });
+    }
+  }, [jobProgress?.status]);
+
+  useEffect(() => {
+    if (jobProgress?.status === "running" && (jobProgress?.done ?? 0) > 0) {
+      qc.invalidateQueries({ queryKey: ["images", datasetId] });
+    }
+  }, [jobProgress?.done]);
+
   const uncaptioned = (dataset?.image_count ?? 0) - (dataset?.captioned_count ?? 0);
-  const isRunning = jobProgress?.status === "running";
   const isDone = jobProgress?.status === "completed";
   const isFailed = jobProgress?.status === "failed";
+  const isCancelled = jobProgress?.status === "cancelled";
+  const canStop = !!effectiveJobId && !isDone && !isFailed && !isCancelled;
+
+  function handleStop() {
+    cancelMutation.mutate();
+  }
+
+  function handleSavePreset() {
+    if (!presetName.trim()) return;
+    savePreset({ name: presetName.trim(), model: selectedModel, style, prompt: customPrompt });
+    setPresetName("");
+    setSavingPreset(false);
+    toast.success("Preset saved");
+  }
 
   return (
     <div style={{ padding: "24px 28px", overflowY: "auto", flex: 1 }}>
@@ -100,10 +147,22 @@ export default function CaptioningPage() {
           <p>Generate captions and tags for training. Long jobs run in the background; close this page anytime.</p>
         </div>
         <div className="phactions">
+          {canStop && (
+            <button
+              className="btn danger"
+              onClick={handleStop}
+              disabled={cancelMutation.isPending}
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <rect x="3" y="3" width="10" height="10" rx="1.5" fill="currentColor" stroke="none"/>
+              </svg>
+              {cancelMutation.isPending ? "Stopping…" : "Stop"}
+            </button>
+          )}
           <button
             className="btn primary"
             onClick={() => runMutation.mutate()}
-            disabled={!selectedModel || runMutation.isPending || isRunning}
+            disabled={!selectedModel || runMutation.isPending || canStop}
           >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6">
               <path d="M4 3l8 5-8 5V3z"/>
@@ -132,7 +191,6 @@ export default function CaptioningPage() {
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {isLoading && <span style={{ color: "var(--fg-mute)", fontSize: 12 }}>Loading models…</span>}
 
-                {/* Local models */}
                 {localModels.map((m) => (
                   <div
                     key={m.id}
@@ -157,7 +215,6 @@ export default function CaptioningPage() {
                   </div>
                 ))}
 
-                {/* Ollama section */}
                 <div style={{ fontSize: 10.5, color: "var(--fg-dim)", letterSpacing: ".04em", textTransform: "uppercase", padding: "6px 0 2px", marginTop: 2 }}>Ollama</div>
                 <div style={{ display: "flex", gap: 8 }}>
                   <select
@@ -217,14 +274,80 @@ export default function CaptioningPage() {
                 <h4>Prompt</h4>
                 <p>Override the default model prompt. Used by PaliGemma and Ollama.</p>
               </div>
-              <div>
-                <textarea
-                  className="input"
-                  style={{ height: 80 }}
-                  value={customPrompt}
-                  onChange={(e) => setCustomPrompt(e.target.value)}
-                  placeholder="Leave blank to use the style preset prompt…"
-                />
+              <textarea
+                className="input"
+                style={{ height: 80 }}
+                value={customPrompt}
+                onChange={(e) => setCustomPrompt(e.target.value)}
+                placeholder="Leave blank to use the style preset prompt…"
+              />
+            </div>
+
+            {/* Presets */}
+            <div className="form-row">
+              <div className="lbl-col">
+                <h4>Presets</h4>
+                <p>Saved prompt &amp; style configurations.</p>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {presets.length === 0 ? (
+                  <p style={{ fontSize: 12, color: "var(--fg-dim)", margin: 0 }}>
+                    No presets saved yet. Enter a prompt above and click Save.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                    {presets.map((p) => (
+                      <div key={p.id} style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <button
+                          className="btn ghost sm"
+                          style={{ flex: 1, justifyContent: "flex-start", textAlign: "left" }}
+                          onClick={() => {
+                            setCustomPrompt(p.prompt);
+                            setStyle(p.style);
+                            toast.success(`Loaded "${p.name}"`);
+                          }}
+                        >
+                          <span style={{ fontWeight: 500 }}>{p.name}</span>
+                          <span style={{ color: "var(--fg-dim)", fontSize: 10.5, marginLeft: 6 }}>{p.style}</span>
+                        </button>
+                        <button
+                          className="btn ghost sm"
+                          style={{ color: "var(--bad)", flexShrink: 0 }}
+                          onClick={() => removePreset(p.id)}
+                          title="Delete preset"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {savingPreset ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <input
+                      className="input"
+                      placeholder="Preset name…"
+                      value={presetName}
+                      onChange={(e) => setPresetName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") handleSavePreset();
+                        if (e.key === "Escape") setSavingPreset(false);
+                      }}
+                      autoFocus
+                      style={{ flex: 1 }}
+                    />
+                    <button className="btn sm primary" disabled={!presetName.trim()} onClick={handleSavePreset}>OK</button>
+                    <button className="btn sm ghost" onClick={() => setSavingPreset(false)}>Cancel</button>
+                  </div>
+                ) : (
+                  <button
+                    className="btn ghost sm"
+                    onClick={() => { setPresetName(""); setSavingPreset(true); }}
+                    style={{ alignSelf: "flex-start" }}
+                  >
+                    + Save current as preset
+                  </button>
+                )}
               </div>
             </div>
 
@@ -306,22 +429,20 @@ export default function CaptioningPage() {
                       <span style={{ color: "var(--fg-dim)", fontSize: 18 }}>/{jobProgress.total ?? 0}</span>
                     </div>
                     <div style={{ color: "var(--fg-mute)", fontSize: 12, marginTop: 2 }}>
-                      {isDone ? "Complete" : isFailed ? "Failed" : "Processing…"}
+                      {isDone ? "Complete" : isFailed ? "Failed" : isCancelled ? "Stopped" : "Processing…"}
                     </div>
                   </div>
-                  <span className={`badge dot ${isDone ? "good" : isFailed ? "bad" : "info"}`}>
-                    {isDone ? "Done" : isFailed ? "Failed" : "Running"}
+                  <span className={`badge dot ${isDone ? "good" : isFailed || isCancelled ? "bad" : "info"}`}>
+                    {isDone ? "Done" : isFailed ? "Failed" : isCancelled ? "Stopped" : "Running"}
                   </span>
                 </div>
 
-                {/* Progress bar */}
                 <div style={{ height: 5, background: "var(--surface-3)", borderRadius: 3, overflow: "hidden" }}>
                   <div style={{ height: "100%", width: `${jobProgress.percent ?? 0}%`, background: "linear-gradient(90deg, var(--accent-2), var(--accent))", transition: "width .4s" }} />
                 </div>
 
                 <div className="divider" />
 
-                {/* Stats */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 12, marginBottom: 14 }}>
                   {(jobProgress as any).throughput_ips && (
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
@@ -329,12 +450,12 @@ export default function CaptioningPage() {
                       <span className="mono">{((jobProgress as any).throughput_ips as number).toFixed(1)} img/s</span>
                     </div>
                   )}
-                  {(jobProgress as any).vram_used_mb && (
+                  {(jobProgress as any).vram_used_mb ? (
                     <div style={{ display: "flex", justifyContent: "space-between" }}>
                       <span style={{ color: "var(--fg-mute)" }}>VRAM</span>
                       <span className="mono">{Math.round((jobProgress as any).vram_used_mb / 1024 * 10) / 10} GB used</span>
                     </div>
-                  )}
+                  ) : null}
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "var(--fg-mute)" }}>Last image</span>
                     <span className="mono" style={{ color: "var(--fg-dim)", maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -343,15 +464,30 @@ export default function CaptioningPage() {
                   </div>
                 </div>
 
-                {/* Last caption preview */}
-                {jobProgress.message && !isDone && !isFailed && (
-                  <div style={{ padding: "10px 12px", background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--r)", fontSize: 12, color: "var(--fg)" }}>
+                {jobProgress.message && !isDone && !isFailed && !isCancelled && (
+                  <div style={{ padding: "10px 12px", background: "var(--surface-2)", border: "1px solid var(--line)", borderRadius: "var(--r)", fontSize: 12, color: "var(--fg)", marginBottom: 12 }}>
                     {jobProgress.message}
                   </div>
                 )}
 
+                {/* Stop button inside progress panel */}
+                {canStop && (
+                  <button
+                    className="btn danger"
+                    style={{ width: "100%" }}
+                    onClick={handleStop}
+                    disabled={cancelMutation.isPending}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                      <rect x="3" y="3" width="10" height="10" rx="1.5"/>
+                    </svg>
+                    {cancelMutation.isPending ? "Stopping…" : "Stop captioning"}
+                  </button>
+                )}
+
                 {isDone && <p style={{ color: "var(--good)", fontSize: 12, marginTop: 8 }}>✓ Captioning complete</p>}
                 {isFailed && <p style={{ color: "var(--bad)", fontSize: 12, marginTop: 8 }}>✗ Captioning failed</p>}
+                {isCancelled && <p style={{ color: "var(--warn)", fontSize: 12, marginTop: 8 }}>⏹ Captioning stopped</p>}
               </>
             )}
           </div>
