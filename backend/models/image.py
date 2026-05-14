@@ -42,6 +42,8 @@ class Image(Base):
     style_similarity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     clip_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     dino_embedding: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    dino_layer_embeddings: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    dino_layer_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     quality_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
     # Caption / tags

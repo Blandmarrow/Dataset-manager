@@ -60,6 +60,7 @@ export interface ImageListItem {
   color_score: number | null;
   saturation_score: number | null;
   style_similarity_score: number | null;
+  dino_layer_scores: Record<string, number> | null;
   quality_flags: Record<string, unknown>;
   caption_text: string;
   tags_json: string[];

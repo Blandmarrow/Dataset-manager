@@ -9,6 +9,7 @@ export const qualityApi = {
     run_watermark?: boolean;
     run_embeddings?: boolean;
     run_dino?: boolean;
+    run_dino_layers?: boolean;
   }) =>
     client.post<{ job_id: string; total: number }>("/quality/score", params).then((r) => r.data),
 
@@ -36,7 +37,8 @@ export const qualityApi = {
     dataset_id: string;
     reference_image_ids: string[];
     reference_embeddings?: string[];
-    embedding_type?: "clip" | "dino";
+    embedding_type?: "clip" | "dino" | "combined" | "dino_all_layers" | "combined_all_layers";
+    dino_layer?: number;
   }) =>
     client.post<{ updated: number }>("/quality/style-similarity", params).then((r) => r.data),
 };

@@ -23,6 +23,7 @@ class ScoreRequest(BaseModel):
     run_watermark: bool = False
     run_embeddings: bool = False
     run_dino: bool = False
+    run_dino_layers: bool = False
 
 
 class DuplicateResolve(BaseModel):
@@ -34,7 +35,8 @@ class StyleSimilarityRequest(BaseModel):
     dataset_id: str
     reference_image_ids: list[str] = []
     reference_embeddings: list[str] = []  # base64-encoded float16 bytes (from embed-references)
-    embedding_type: str = "clip"  # "clip" | "dino"
+    embedding_type: str = "clip"  # "clip" | "dino" | "combined"
+    dino_layer: int | None = None  # 1–12; only when embedding_type == "dino"
 
 
 @router.post("/score")
@@ -87,13 +89,16 @@ async def score_quality(body: ScoreRequest, db: AsyncSession = Depends(get_db)):
 
         clip_embeddings: list[bytes | None] = []
         dino_embeddings: list[bytes | None] = []
+        dino_layer_embeddings: list[bytes | None] = []
         if body.run_embeddings:
             entry = await model_manager.load_aesthetic()
             clip_embeddings = await extract_clip_embeddings_batch(paths, entry.model, job_id=job_id)
             if body.run_dino:
-                from backend.ml.dino_scorer import extract_embeddings_dino
+                from backend.ml.dino_scorer import extract_embeddings_dino, extract_layer_embeddings_dino
                 dino_entry = await model_manager.load_dino()
                 dino_embeddings = await extract_embeddings_dino(paths, dino_entry, job_id=job_id)
+                if body.run_dino_layers:
+                    dino_layer_embeddings = await extract_layer_embeddings_dino(paths, dino_entry, job_id=job_id)
 
         async with AsyncSessionLocal() as session:
             for i, img_id in enumerate(ids):
@@ -124,6 +129,8 @@ async def score_quality(body: ScoreRequest, db: AsyncSession = Depends(get_db)):
                     img.clip_embedding = clip_embeddings[i]
                 if dino_embeddings:
                     img.dino_embedding = dino_embeddings[i]
+                if dino_layer_embeddings:
+                    img.dino_layer_embeddings = dino_layer_embeddings[i]
             await session.commit()
 
         # Detect duplicates after scoring
@@ -183,56 +190,230 @@ async def compute_style_similarity(
     body: StyleSimilarityRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    from backend.ml.similarity_scorer import compute_style_similarity
-
-    col = Image.clip_embedding if body.embedding_type == "clip" else Image.dino_embedding
-
-    ref_embs: list[bytes] = []
-
-    if body.reference_image_ids:
-        ref_result = await db.execute(
-            select(Image.id, col).where(Image.id.in_(body.reference_image_ids))
-        )
-        ref_embs.extend(r[1] for r in ref_result.all() if r[1] is not None)
-
-    for b64 in body.reference_embeddings:
-        ref_embs.append(base64.b64decode(b64))
-
-    if not ref_embs:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"No {body.embedding_type} embeddings found for reference images. "
-                "Run embedding extraction first, or upload local reference images."
-            ),
-        )
-
-    cand_result = await db.execute(
-        select(Image.id, col).where(
-            Image.dataset_id == body.dataset_id,
-            col.isnot(None),
-        )
-    )
-    cand_rows = [(r[0], r[1]) for r in cand_result.all()]
-    if not cand_rows:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No {body.embedding_type} embeddings found for dataset images. Run embedding extraction first.",
-        )
+    from backend.ml.similarity_scorer import compute_style_similarity as _cosine_sim
+    from backend.ml.similarity_scorer import compute_combined_similarity
 
     loop = asyncio.get_event_loop()
-    scores = await loop.run_in_executor(
-        None, compute_style_similarity, ref_embs, [r[1] for r in cand_rows]
-    )
 
-    await db.execute(
-        update(Image),
-        [{"id": img_id, "style_similarity_score": score}
-         for (img_id, _), score in zip(cand_rows, scores)],
-    )
-    await db.commit()
+    # --- CLIP branch (unchanged behaviour) ---
+    if body.embedding_type == "clip":
+        col = Image.clip_embedding
+        ref_embs: list[bytes] = []
+        if body.reference_image_ids:
+            ref_result = await db.execute(
+                select(Image.id, col).where(Image.id.in_(body.reference_image_ids))
+            )
+            ref_embs.extend(r[1] for r in ref_result.all() if r[1] is not None)
+        for b64 in body.reference_embeddings:
+            ref_embs.append(base64.b64decode(b64))
+        if not ref_embs:
+            raise HTTPException(status_code=400, detail="No CLIP embeddings found for reference images. Run embedding extraction first, or upload local reference images.")
+        cand_result = await db.execute(
+            select(Image.id, col).where(Image.dataset_id == body.dataset_id, col.isnot(None))
+        )
+        cand_rows = [(r[0], r[1]) for r in cand_result.all()]
+        if not cand_rows:
+            raise HTTPException(status_code=400, detail="No CLIP embeddings found for dataset images. Run embedding extraction first.")
+        scores = await loop.run_in_executor(None, _cosine_sim, ref_embs, [r[1] for r in cand_rows])
+        await db.execute(update(Image), [{"id": img_id, "style_similarity_score": s} for (img_id, _), s in zip(cand_rows, scores)])
+        await db.commit()
+        return {"updated": len(cand_rows)}
 
-    return {"updated": len(cand_rows)}
+    # --- DINOv2 branch ---
+    if body.embedding_type == "dino":
+        if body.dino_layer is None:
+            # Final layer (current behaviour)
+            col = Image.dino_embedding
+            ref_embs = []
+            if body.reference_image_ids:
+                ref_result = await db.execute(
+                    select(Image.id, col).where(Image.id.in_(body.reference_image_ids))
+                )
+                ref_embs.extend(r[1] for r in ref_result.all() if r[1] is not None)
+            for b64 in body.reference_embeddings:
+                ref_embs.append(base64.b64decode(b64))
+            if not ref_embs:
+                raise HTTPException(status_code=400, detail="No DINOv2 embeddings found for reference images. Run embedding extraction first.")
+            cand_result = await db.execute(
+                select(Image.id, col).where(Image.dataset_id == body.dataset_id, col.isnot(None))
+            )
+            cand_rows = [(r[0], r[1]) for r in cand_result.all()]
+            if not cand_rows:
+                raise HTTPException(status_code=400, detail="No DINOv2 embeddings found for dataset images. Run embedding extraction first.")
+            scores = await loop.run_in_executor(None, _cosine_sim, ref_embs, [r[1] for r in cand_rows])
+            await db.execute(update(Image), [{"id": img_id, "style_similarity_score": s} for (img_id, _), s in zip(cand_rows, scores)])
+            await db.commit()
+            return {"updated": len(cand_rows)}
+        else:
+            # Per-layer mode
+            from backend.ml.dino_scorer import slice_layer_embedding
+            layer = body.dino_layer
+            if not (1 <= layer <= 12):
+                raise HTTPException(status_code=422, detail="dino_layer must be between 1 and 12.")
+            col = Image.dino_layer_embeddings
+            ref_embs = []
+            if body.reference_image_ids:
+                ref_result = await db.execute(
+                    select(Image.id, col).where(Image.id.in_(body.reference_image_ids))
+                )
+                ref_embs.extend(
+                    slice_layer_embedding(r[1], layer)
+                    for r in ref_result.all() if r[1] is not None
+                )
+            for b64 in body.reference_embeddings:
+                ref_embs.append(slice_layer_embedding(base64.b64decode(b64), layer))
+            if not ref_embs:
+                raise HTTPException(status_code=400, detail="No per-layer DINOv2 embeddings found for reference images. Run per-layer embedding extraction first.")
+            cand_result = await db.execute(
+                select(Image.id, col).where(Image.dataset_id == body.dataset_id, col.isnot(None))
+            )
+            cand_rows_raw = [(r[0], r[1]) for r in cand_result.all()]
+            cand_rows = [(img_id, slice_layer_embedding(blob, layer)) for img_id, blob in cand_rows_raw]
+            if not cand_rows:
+                raise HTTPException(status_code=400, detail="No per-layer DINOv2 embeddings found for dataset images. Run per-layer embedding extraction first.")
+            scores = await loop.run_in_executor(None, _cosine_sim, ref_embs, [r[1] for r in cand_rows])
+            await db.execute(update(Image), [{"id": img_id, "style_similarity_score": s} for (img_id, _), s in zip(cand_rows, scores)])
+            await db.commit()
+            return {"updated": len(cand_rows)}
+
+    # --- Combined branch ---
+    if body.embedding_type in ("combined", "combined_all_layers"):
+        from backend.ml.dino_scorer import slice_layer_embedding
+        if body.reference_embeddings:
+            raise HTTPException(status_code=400, detail="External reference files are CLIP-only. Combined mode requires reference images from the dataset.")
+        layer = body.dino_layer  # None → use dino_embedding; int → use dino_layer_embeddings slice
+        if layer is not None and not (1 <= layer <= 12):
+            raise HTTPException(status_code=422, detail="dino_layer must be between 1 and 12.")
+        use_layer_col = layer is not None or body.embedding_type == "combined_all_layers"
+
+        # Fetch refs — always need clip; dino column depends on mode
+        if body.reference_image_ids:
+            if use_layer_col:
+                ref_result = await db.execute(
+                    select(Image.id, Image.clip_embedding, Image.dino_layer_embeddings)
+                    .where(Image.id.in_(body.reference_image_ids))
+                )
+                ref_rows = [(r[0], r[1], r[2]) for r in ref_result.all() if r[1] is not None and r[2] is not None]
+            else:
+                ref_result = await db.execute(
+                    select(Image.id, Image.clip_embedding, Image.dino_embedding)
+                    .where(Image.id.in_(body.reference_image_ids))
+                )
+                ref_rows = [(r[0], r[1], r[2]) for r in ref_result.all() if r[1] is not None and r[2] is not None]
+        else:
+            ref_rows = []
+        if not ref_rows:
+            detail = (
+                "No images with both CLIP and per-layer DINOv2 embeddings found among reference images. Run per-layer embedding extraction first."
+                if use_layer_col else
+                "No images with both CLIP and DINOv2 embeddings found among reference images. Run embedding extraction (CLIP + DINOv2) first."
+            )
+            raise HTTPException(status_code=400, detail=detail)
+
+        ref_clip = [r[1] for r in ref_rows]
+        ref_dino_raw = [r[2] for r in ref_rows]  # either dino_embedding bytes or dino_layer_embeddings bytes
+
+        # Fetch candidates
+        if use_layer_col:
+            cand_result = await db.execute(
+                select(Image.id, Image.clip_embedding, Image.dino_layer_embeddings)
+                .where(
+                    Image.dataset_id == body.dataset_id,
+                    Image.clip_embedding.isnot(None),
+                    Image.dino_layer_embeddings.isnot(None),
+                )
+            )
+        else:
+            cand_result = await db.execute(
+                select(Image.id, Image.clip_embedding, Image.dino_embedding)
+                .where(
+                    Image.dataset_id == body.dataset_id,
+                    Image.clip_embedding.isnot(None),
+                    Image.dino_embedding.isnot(None),
+                )
+            )
+        cand_rows_full = [(r[0], r[1], r[2]) for r in cand_result.all()]
+        if not cand_rows_full:
+            detail = (
+                "No dataset images have both CLIP and per-layer DINOv2 embeddings. Run per-layer embedding extraction first."
+                if use_layer_col else
+                "No dataset images have both CLIP and DINOv2 embeddings. Run embedding extraction (CLIP + DINOv2) first."
+            )
+            raise HTTPException(status_code=400, detail=detail)
+
+        cand_clip = [r[1] for r in cand_rows_full]
+        cand_dino_raw = [r[2] for r in cand_rows_full]
+
+        if body.embedding_type == "combined_all_layers":
+            # Score CLIP + each DINOv2 layer independently, store in dino_layer_scores
+            def _combined_all_layers() -> list[dict]:
+                results = []
+                for i, (img_id, _, blob) in enumerate(cand_rows_full):
+                    layer_scores: dict[str, float] = {}
+                    for lyr in range(1, 13):
+                        r_slices = [slice_layer_embedding(b, lyr) for b in ref_dino_raw]
+                        c_slice = slice_layer_embedding(blob, lyr)
+                        dino_scores = _cosine_sim(r_slices, [c_slice])
+                        clip_scores = _cosine_sim(ref_clip, [cand_clip[i]])
+                        layer_scores[str(lyr)] = round(0.38 * clip_scores[0] + 0.62 * dino_scores[0], 4)
+                    results.append({"id": img_id, "dino_layer_scores": layer_scores})
+                return results
+
+            updates = await loop.run_in_executor(None, _combined_all_layers)
+            await db.execute(update(Image), updates)
+            await db.commit()
+            return {"updated": len(updates)}
+        else:
+            # Single layer or final layer combined score
+            if layer is not None:
+                ref_dino = [slice_layer_embedding(b, layer) for b in ref_dino_raw]
+                cand_dino = [slice_layer_embedding(b, layer) for b in cand_dino_raw]
+            else:
+                ref_dino = ref_dino_raw
+                cand_dino = cand_dino_raw
+            scores = await loop.run_in_executor(None, compute_combined_similarity, ref_clip, cand_clip, ref_dino, cand_dino)
+            await db.execute(update(Image), [{"id": r[0], "style_similarity_score": s} for r, s in zip(cand_rows_full, scores)])
+            await db.commit()
+            return {"updated": len(cand_rows_full)}
+
+    # --- All DINOv2 layers branch ---
+    if body.embedding_type == "dino_all_layers":
+        from backend.ml.dino_scorer import slice_layer_embedding
+        col = Image.dino_layer_embeddings
+        ref_blobs: list[bytes] = []
+        if body.reference_image_ids:
+            ref_result = await db.execute(
+                select(Image.id, col).where(Image.id.in_(body.reference_image_ids))
+            )
+            ref_blobs.extend(r[1] for r in ref_result.all() if r[1] is not None)
+        if not ref_blobs:
+            raise HTTPException(status_code=400, detail="No per-layer DINOv2 embeddings found for reference images. Run per-layer embedding extraction first.")
+        cand_result = await db.execute(
+            select(Image.id, col).where(Image.dataset_id == body.dataset_id, col.isnot(None))
+        )
+        cand_rows_blobs = [(r[0], r[1]) for r in cand_result.all()]
+        if not cand_rows_blobs:
+            raise HTTPException(status_code=400, detail="No per-layer DINOv2 embeddings found for dataset images. Run per-layer embedding extraction first.")
+
+        # Compute similarity for each layer independently, in a single executor call
+        def _all_layer_scores() -> list[dict]:
+            results = []
+            for img_id, blob in cand_rows_blobs:
+                layer_scores: dict[str, float] = {}
+                for layer in range(1, 13):
+                    r_slices = [slice_layer_embedding(b, layer) for b in ref_blobs]
+                    c_slice = slice_layer_embedding(blob, layer)
+                    score = _cosine_sim(r_slices, [c_slice])[0]
+                    layer_scores[str(layer)] = score
+                results.append({"id": img_id, "dino_layer_scores": layer_scores})
+            return results
+
+        updates = await loop.run_in_executor(None, _all_layer_scores)
+        await db.execute(update(Image), updates)
+        await db.commit()
+        return {"updated": len(updates)}
+
+    raise HTTPException(status_code=422, detail=f"Unknown embedding_type '{body.embedding_type}'. Use 'clip', 'dino', 'combined', or 'dino_all_layers'.")
 
 
 @router.get("/duplicates/{dataset_id}")

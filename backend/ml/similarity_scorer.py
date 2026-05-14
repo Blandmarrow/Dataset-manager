@@ -30,3 +30,20 @@ def compute_style_similarity(
     scores = cand_matrix @ mean_ref         # (C,)
 
     return [float(round(float(s), 4)) for s in scores]
+
+
+def compute_combined_similarity(
+    reference_clip: list[bytes],
+    candidate_clip: list[bytes],
+    reference_dino: list[bytes],
+    candidate_dino: list[bytes],
+    clip_weight: float = 0.38,
+    dino_weight: float = 0.62,
+) -> list[float]:
+    """Weighted blend of CLIP and DINOv2 cosine similarities."""
+    clip_scores = compute_style_similarity(reference_clip, candidate_clip)
+    dino_scores = compute_style_similarity(reference_dino, candidate_dino)
+    return [
+        float(round(clip_weight * c + dino_weight * d, 4))
+        for c, d in zip(clip_scores, dino_scores)
+    ]

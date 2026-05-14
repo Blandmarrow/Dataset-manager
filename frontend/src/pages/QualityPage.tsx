@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
@@ -14,6 +14,7 @@ const SCORING_OPTIONS = [
   { key: "watermark", label: "Watermark detection", desc: "CLIP zero-shot classification for text overlays and logos.", vram: "2.1 GB" },
   { key: "embeddings", label: "Style embeddings · CLIP", desc: "Required for the style-similarity workflow below.", vram: "2.1 GB" },
   { key: "dino", label: "DINOv2 embeddings", desc: "Object-aware embedding alongside CLIP. Higher VRAM.", vram: "1.2 GB" },
+  { key: "dino_layers", label: "DINOv2 per-layer embeds", desc: "Stores all 12 transformer layer CLS tokens. Enables per-layer style similarity.", vram: "1.2 GB" },
 ];
 
 export default function QualityPage() {
@@ -25,13 +26,21 @@ export default function QualityPage() {
   const [runWatermark, setRunWatermark] = useState(false);
   const [runEmbeddings, setRunEmbeddings] = useState(false);
   const [runDino, setRunDino] = useState(false);
+  const [runDinoLayers, setRunDinoLayers] = useState(false);
   const [showStyleSection, setShowStyleSection] = useState(false);
   const [selectedRefIds, setSelectedRefIds] = useState<Set<string>>(new Set());
   const [externalRefFiles, setExternalRefFiles] = useState<File[]>([]);
-  const [embeddingType, setEmbeddingType] = useState<"clip" | "dino">("clip");
+  const [embeddingType, setEmbeddingType] = useState<"clip" | "dino" | "combined">("clip");
+  const [dinoLayer, setDinoLayer] = useState<number | "all" | null>("all");
 
   useJobSSE(activeJobId);
   const jobProgress = useJobStore((s) => s.activeJobs.get(activeJobId ?? ""));
+
+  const embeddingTypeInitialized = useRef(false);
+  useEffect(() => {
+    if (!embeddingTypeInitialized.current) { embeddingTypeInitialized.current = true; return; }
+    if (embeddingType === "clip") setDinoLayer(null);
+  }, [embeddingType]);
 
   useEffect(() => {
     if (jobProgress?.status === "completed") {
@@ -75,6 +84,7 @@ export default function QualityPage() {
         run_watermark: runWatermark,
         run_embeddings: runEmbeddings,
         run_dino: runEmbeddings && runDino,
+        run_dino_layers: runEmbeddings && runDino && runDinoLayers,
       }),
     onSuccess: (data) => {
       if (data.job_id) { setActiveJobId(data.job_id); toast.success("Quality scoring started"); }
@@ -98,11 +108,18 @@ export default function QualityPage() {
         const result = await qualityApi.embedReferences(externalRefFiles);
         reference_embeddings = result.embeddings;
       }
+      const effectiveType = externalRefFiles.length > 0 ? "clip" : embeddingType;
+      const isAllLayers = dinoLayer === "all";
+      let apiType: "clip" | "dino" | "combined" | "dino_all_layers" | "combined_all_layers" = effectiveType as typeof apiType;
+      if (effectiveType === "dino" && isAllLayers) apiType = "dino_all_layers";
+      else if (effectiveType === "combined" && isAllLayers) apiType = "combined_all_layers";
+      const effectiveDinoLayer = (["dino", "combined"].includes(effectiveType) && typeof dinoLayer === "number") ? dinoLayer : undefined;
       return qualityApi.styleSimilarity({
         dataset_id: datasetId!,
         reference_image_ids: Array.from(selectedRefIds),
         reference_embeddings,
-        embedding_type: externalRefFiles.length > 0 ? "clip" : embeddingType,
+        embedding_type: apiType,
+        dino_layer: effectiveDinoLayer,
       });
     },
     onSuccess: (data) => {
@@ -130,6 +147,7 @@ export default function QualityPage() {
     watermark: [runWatermark, setRunWatermark],
     embeddings: [runEmbeddings, setRunEmbeddings],
     dino: [runDino, setRunDino],
+    dino_layers: [runDinoLayers, setRunDinoLayers],
   };
 
   return (
@@ -158,7 +176,11 @@ export default function QualityPage() {
         </div>
         <div className="panel-b">
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-            {SCORING_OPTIONS.filter((o) => o.key !== "dino" || runEmbeddings).map((opt) => {
+            {SCORING_OPTIONS.filter((o) => {
+              if (o.key === "dino") return runEmbeddings;
+              if (o.key === "dino_layers") return runEmbeddings && runDino;
+              return true;
+            }).map((opt) => {
               const [checked, setChecked] = checkMap[opt.key];
               return (
                 <label key={opt.key} className={`model-row${checked ? " sel" : ""}`} style={{ cursor: "pointer" }}>
@@ -207,13 +229,46 @@ export default function QualityPage() {
             <div className="form-row">
               <div className="lbl-col">
                 <h4>Embedding model</h4>
-                <p>CLIP for general images; DINOv2 for object-shape similarity. Both require embeddings to be computed first.</p>
+                <p>CLIP for general images; DINOv2 for object-shape similarity; CLIP + DINOv2 blends both (0.38 × CLIP + 0.62 × DINOv2). All require embeddings computed first.</p>
               </div>
               <div className="row-flex">
                 <button className={`btn sm${embeddingType === "clip" ? " primary" : ""}`} onClick={() => setEmbeddingType("clip")}>CLIP</button>
                 <button className={`btn sm${embeddingType === "dino" ? " primary" : ""}`} onClick={() => setEmbeddingType("dino")} disabled={externalRefFiles.length > 0}>DINOv2</button>
+                <button className={`btn sm${embeddingType === "combined" ? " primary" : ""}`} onClick={() => setEmbeddingType("combined")} disabled={externalRefFiles.length > 0}>CLIP + DINOv2</button>
               </div>
             </div>
+
+            {(embeddingType === "dino" || embeddingType === "combined") && externalRefFiles.length === 0 && (
+              <div className="form-row">
+                <div className="lbl-col">
+                  <h4>DINOv2 layer</h4>
+                  <p>Each transformer block captures increasingly abstract features. "Final" uses the pre-computed <span className="mono">dino_embedding</span>. All others require per-layer embeddings. "All layers" scores each layer independently and stores results for comparison in the image detail view.</p>
+                </div>
+                <select
+                  className="select"
+                  value={dinoLayer === "all" ? "all" : (dinoLayer ?? 12)}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "all") setDinoLayer("all");
+                    else { const n = Number(v); setDinoLayer(n === 12 ? null : n); }
+                  }}
+                >
+                  <option value={1}>Layer 1 — Low-level color &amp; gradients</option>
+                  <option value={2}>Layer 2 — Edges &amp; corners</option>
+                  <option value={3}>Layer 3 — Local texture orientations</option>
+                  <option value={4}>Layer 4 — Texture patterns &amp; simple shapes</option>
+                  <option value={5}>Layer 5 — Object part emergence</option>
+                  <option value={6}>Layer 6 — Region boundaries &amp; contours</option>
+                  <option value={7}>Layer 7 — Complex textures &amp; patterns</option>
+                  <option value={8}>Layer 8 — Higher-level object parts</option>
+                  <option value={9}>Layer 9 — Object &amp; shape representations</option>
+                  <option value={10}>Layer 10 — Semantic object features</option>
+                  <option value={11}>Layer 11 — Abstract semantic content</option>
+                  <option value={12}>Layer 12 — Global semantics (Final, default)</option>
+                  <option value="all">{embeddingType === "combined" ? "All layers — Score CLIP + each DINOv2 layer individually" : "All layers — Score each layer individually"}</option>
+                </select>
+              </div>
+            )}
 
             <div className="form-row">
               <div className="lbl-col">

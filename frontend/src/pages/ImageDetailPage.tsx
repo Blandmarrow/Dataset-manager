@@ -33,6 +33,66 @@ function modelType(model: string) {
   return null;
 }
 
+const DINO_LAYER_LABELS: Record<string, string> = {
+  "1":  "Low-level color & gradients",
+  "2":  "Edges & corners",
+  "3":  "Local texture orientations",
+  "4":  "Texture patterns & simple shapes",
+  "5":  "Object part emergence",
+  "6":  "Region boundaries & contours",
+  "7":  "Complex textures & patterns",
+  "8":  "Higher-level object parts",
+  "9":  "Object & shape representations",
+  "10": "Semantic object features",
+  "11": "Abstract semantic content",
+  "12": "Global semantics (Final)",
+};
+
+function DinoLayerBreakdown({ scores }: { scores: Record<string, number> }) {
+  const [open, setOpen] = useState(true);
+  const layers = Array.from({ length: 12 }, (_, i) => String(i + 1))
+    .filter((k) => scores[k] !== undefined);
+  const maxScore = Math.max(...layers.map((k) => scores[k]));
+
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+      <button
+        className="icon-btn"
+        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", justifyContent: "space-between", padding: "2px 0", background: "none", border: "none" }}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span style={{ fontSize: 11, fontWeight: 600, color: "var(--fg-mute)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          DINOv2 layer breakdown
+        </span>
+        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+      </button>
+      {open && (
+        <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 4 }}>
+          {layers.map((k) => {
+            const score = scores[k];
+            const pct = maxScore > 0 ? (score / maxScore) * 100 : 0;
+            const label = DINO_LAYER_LABELS[k] ?? `Layer ${k}`;
+            return (
+              <div key={k} style={{ display: "grid", gridTemplateColumns: "20px 1fr auto", alignItems: "center", gap: 6 }}>
+                <span style={{ fontSize: 10, color: "var(--fg)", textAlign: "right", fontFamily: "monospace" }}>{k}</span>
+                <div style={{ position: "relative", height: 14, background: "var(--surface-3)", borderRadius: 3, overflow: "hidden" }} title={label}>
+                  <div style={{ position: "absolute", inset: "0 auto 0 0", width: `${pct}%`, background: "var(--accent)", borderRadius: 3, transition: "width .3s" }} />
+                  <span style={{ position: "absolute", left: 4, top: 0, lineHeight: "14px", fontSize: 9, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", maxWidth: "calc(100% - 8px)" }}>
+                    {label}
+                  </span>
+                </div>
+                <span style={{ fontSize: 10, color: "var(--fg)", fontFamily: "monospace", minWidth: 32, textAlign: "right" }}>
+                  {(score * 100).toFixed(0)}%
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ImageDetailPage() {
   const { datasetId, imageId } = useParams<{ datasetId: string; imageId: string }>();
   const navigate = useNavigate();
@@ -407,6 +467,10 @@ export default function ImageDetailPage() {
               </>
             )}
           </div>
+
+          {image.dino_layer_scores && Object.keys(image.dino_layer_scores).length > 0 && (
+            <DinoLayerBreakdown scores={image.dino_layer_scores} />
+          )}
 
           {/* Quality flags */}
           {(isDuplicate === true || isBlurry === true || isUniform === true || hasWatermark === true) && (

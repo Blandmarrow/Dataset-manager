@@ -22,6 +22,7 @@ class ImageOut(BaseModel):
     color_score: float | None = None
     saturation_score: float | None = None
     style_similarity_score: float | None = None
+    dino_layer_scores: dict | None = None
     quality_flags: dict[str, Any]
     caption_text: str
     caption_style: str
@@ -47,6 +48,7 @@ class ImageListItem(BaseModel):
     color_score: float | None = None
     saturation_score: float | None = None
     style_similarity_score: float | None = None
+    dino_layer_scores: dict | None = None
     quality_flags: dict[str, Any]
     caption_text: str
     tags_json: list[str]

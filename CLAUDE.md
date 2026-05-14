@@ -69,8 +69,8 @@ Quality scorers and what they add to `Image`:
 |---|---|---|
 | `ml/technical_scorer.py` | `blur_score`, `noise_score`, `uniformity_score`, `color_score`, `saturation_score`; flags `is_blurry`, `is_noisy`, `is_uniform` | Pure OpenCV/numpy, no GPU |
 | `ml/aesthetic_scorer.py` | `aesthetic_score` (1–10), `watermark_score` (0–1), flag `has_watermark`, `clip_embedding` (BLOB, float16) | CLIP ViT-L-14; text encoder used for zero-shot watermark; image encoder for embeddings |
-| `ml/dino_scorer.py` | `dino_embedding` (BLOB, float16) | DINOv2 CLS token, 768-dim |
-| `ml/similarity_scorer.py` | — | CPU-only; `compute_style_similarity(ref_bytes, cand_bytes)` returns cosine similarity list |
+| `ml/dino_scorer.py` | `dino_embedding` (BLOB, float16), `dino_layer_embeddings` (BLOB, float16) | `dino_embedding`: final-layer CLS token, 768-dim. `dino_layer_embeddings`: all 12 transformer-layer CLS tokens concatenated, 18 432 bytes (12 × 768 × float16); layer N (1-indexed) at offset `(N-1)*768*2`. `slice_layer_embedding(blob, layer)` extracts one layer's bytes. |
+| `ml/similarity_scorer.py` | — | CPU-only. `compute_style_similarity(ref_bytes, cand_bytes)` — cosine similarity of candidates to mean reference. `compute_combined_similarity(ref_clip, cand_clip, ref_dino, cand_dino, clip_w=0.38, dino_w=0.62)` — weighted blend of CLIP and DINOv2 cosine similarities. |
 
 Flag thresholds (defined as constants in their respective modules):
 | Flag | Column | Threshold | Constant |
@@ -86,7 +86,19 @@ Recommended training-data thresholds (surfaced in the QualityPage score guide):
 - **Blur / Noise / Uniform**: exclude flagged images unless the flag matches intentional style
 - **Style similarity**: ≥ 0.5 cosine similarity as a starting point for style-consistent filtering
 
-Style similarity flow: (1) run scoring with `run_embeddings=True` to store `clip_embedding`/`dino_embedding` per image; (2) call `POST /quality/style-similarity` with `reference_image_ids` and/or `reference_embeddings` (base64 float16 bytes) to write `style_similarity_score` for all images via CPU numpy matmul — no job queue needed. Local reference files (not in the dataset) can be embedded on-the-fly via `POST /quality/embed-references` (multipart upload → returns base64 embeddings to pass as `reference_embeddings`).
+**Style similarity flow**: (1) run scoring with `run_embeddings=True` to store `clip_embedding`/`dino_embedding`; optionally also `run_dino=True` + `run_dino_layers=True` to store `dino_layer_embeddings` (all 12 transformer-layer CLS tokens). (2) call `POST /quality/style-similarity` with `reference_image_ids` and/or `reference_embeddings` (base64 float16 bytes, CLIP-only). The `embedding_type` field selects the scoring mode:
+
+| `embedding_type` | `dino_layer` | Column(s) written | Description |
+|---|---|---|---|
+| `"clip"` | — | `style_similarity_score` | Cosine similarity of CLIP embeddings |
+| `"dino"` | `null` | `style_similarity_score` | Cosine similarity of DINOv2 final-layer embeddings |
+| `"dino"` | 1–12 | `style_similarity_score` | Cosine similarity using a specific DINOv2 transformer layer (from `dino_layer_embeddings`) |
+| `"combined"` | `null` | `style_similarity_score` | `0.38 × clip_sim + 0.62 × dino_sim` (final layer) |
+| `"combined"` | 1–12 | `style_similarity_score` | `0.38 × clip_sim + 0.62 × dino_layer_sim` (specific layer) |
+| `"dino_all_layers"` | — | `dino_layer_scores` (JSON) | Scores each of the 12 DINOv2 layers independently; writes `{"1": score, …, "12": score}` |
+| `"combined_all_layers"` | — | `dino_layer_scores` (JSON) | Blended score (0.38 CLIP + 0.62 DINOv2) for each of the 12 layers; writes `{"1": score, …, "12": score}` |
+
+Local reference files can be embedded on-the-fly via `POST /quality/embed-references` (multipart upload → returns base64 CLIP embeddings). External refs are CLIP-only; `"combined"`, `"dino"`, and `"dino_all_layers"` / `"combined_all_layers"` modes require dataset images as references. No job queue — all similarity computation is CPU-only numpy and runs synchronously in the request.
 
 **TorchDynamo is disabled** (`TORCHDYNAMO_DISABLE=1` set in `main.py`). Triton is unavailable on Windows and single-image inference gains nothing from `torch.compile`, so it is disabled for the entire process. Do not remove this without re-testing all ML inference paths on Windows.
 
