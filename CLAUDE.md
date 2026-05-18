@@ -6,11 +6,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Launch
 
-```powershell
-.\setup.ps1        # First time only — creates venv, installs deps, builds frontend
-.\start.ps1        # Production: runs migrations, rebuilds frontend if any src file is newer than dist, serves on :8000
-.\start_dev.ps1    # Dev mode: backend on :8000 (hot reload) + Vite frontend on :5173
-```
+Double-click the `.bat` files in Explorer, or run the `.ps1` scripts directly in PowerShell:
+
+| File | Purpose |
+|---|---|
+| `Start Dataset Manager.bat` | Double-click to launch (wraps `start.ps1`) |
+| `Update Dataset Manager.bat` | Double-click to update (wraps `update.ps1`) |
+| `setup.ps1` | First time only — creates venv, installs deps, builds frontend |
+| `start.ps1` | Production: runs migrations, rebuilds frontend if needed, serves on :8000 |
+| `update.ps1` | `git pull` → update pip deps → `npm install` → rebuild frontend |
+| `start_dev.ps1` | Dev mode: backend on :8000 (hot reload) + Vite frontend on :5173 |
 
 To shut down the running server, click the power icon button in the top-right of the TopBar (confirms before shutting down), or press Ctrl+C in the terminal.
 
@@ -168,6 +173,10 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 **Card navigation**: Dataset card clicks use `usePaneNavigate().go(url, view)` (not raw `useNavigate`) so that clicking a dataset inside a split pane updates that pane's view rather than the URL. Do not revert to `useNavigate` here.
 
 **Drag-and-drop upload**: `GalleryPage` supports dropping image files onto the grid (`onDragEnter`/`onDragLeave`/`onDrop` on the scroll container wrapper) — this works. `DatasetsPage` has the plumbing in place (native `dragover`/`drop` listeners via `useEffect` on `pageRef`, `data-dataset-id` attributes on cards, `dragOverId` state for the overlay) but the drop does not trigger uploads reliably — **TODO: debug and fix**. Approaches already tried without success: React synthetic `onDragEnter`+`onDragLeave`, `onDragOver`-based debounce timer, native `addEventListener` on the page container with `elementFromPoint`.
+
+**Dataset folder naming**: `create_dataset()` in `dataset_service.py` derives the folder name from the dataset name via `_name_to_slug()` (lowercase, spaces → underscores, special chars stripped, max 80 chars) rather than using the UUID. The UUID is still the DB primary key. If the slug folder already exists (name collision edge case), a `{slug}_{uuid8}` suffix is appended. Example: dataset named `"My Portraits"` creates `data/datasets/my_portraits/`.
+
+**Dataset rename**: `PATCH /datasets/{id}` (router: `routers/datasets.py`) accepts `{ name?, description? }`. When the name changes it calls `rename_dataset()` in `dataset_service.py`, which: (1) computes the new slug, (2) moves the folder on disk via `Path.rename()`, (3) bulk-updates all `Image.file_path` and `Image.thumbnail_path` records for images in that dataset using string prefix replacement, (4) updates `Dataset.folder_path` and `Dataset.name` — all committed in one transaction. Description-only updates skip the folder move. A 400 is returned if the new name conflicts with an existing dataset. The frontend exposes this via a pencil icon button in the card hover-action row (`renameTarget` / `renameName` state + `renameMutation`).
 
 ### Statistics page
 

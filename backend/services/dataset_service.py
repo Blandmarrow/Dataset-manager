@@ -1,4 +1,5 @@
 import asyncio
+import re
 import shutil
 import statistics
 from datetime import datetime
@@ -13,6 +14,15 @@ from backend.models import Dataset, Image, Tag
 from backend.services.image_service import extract_generation_metadata, generate_thumbnail, get_image_info
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
+
+
+def _name_to_slug(name: str) -> str:
+    slug = name.lower().strip()
+    slug = re.sub(r"[^\w\s-]", "", slug)
+    slug = re.sub(r"[\s]+", "_", slug)
+    slug = re.sub(r"_+", "_", slug)
+    slug = slug.strip("_-")
+    return slug[:80] or "dataset"
 
 
 def _bucket(val: float, edges: list[float], labels: list[str]) -> str:
@@ -56,13 +66,49 @@ def _p95(sorted_vals: list[float]) -> float:
 
 async def create_dataset(db: AsyncSession, name: str, description: str = "") -> Dataset:
     ds_id = str(uuid4())
-    folder = settings.datasets_dir / ds_id
+    slug = _name_to_slug(name)
+    folder = settings.datasets_dir / slug
+    if folder.exists():
+        folder = settings.datasets_dir / f"{slug}_{ds_id[:8]}"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "images").mkdir(exist_ok=True)
     (folder / "thumbnails").mkdir(exist_ok=True)
 
     ds = Dataset(id=ds_id, name=name, description=description, folder_path=str(folder))
     db.add(ds)
+    await db.commit()
+    await db.refresh(ds)
+    return ds
+
+
+async def rename_dataset(
+    db: AsyncSession,
+    ds: Dataset,
+    new_name: str,
+    new_description: str | None = None,
+) -> Dataset:
+    old_folder = Path(ds.folder_path)
+    new_slug = _name_to_slug(new_name)
+    new_folder = settings.datasets_dir / new_slug
+
+    if old_folder.exists() and old_folder.resolve() != new_folder.resolve():
+        if new_folder.exists():
+            new_folder = settings.datasets_dir / f"{new_slug}_{ds.id[:8]}"
+        old_folder.rename(new_folder)
+
+        old_str = str(old_folder)
+        new_str = str(new_folder)
+        result = await db.execute(select(Image).where(Image.dataset_id == ds.id))
+        for img in result.scalars().all():
+            if img.file_path and img.file_path.startswith(old_str):
+                img.file_path = new_str + img.file_path[len(old_str):]
+            if img.thumbnail_path and img.thumbnail_path.startswith(old_str):
+                img.thumbnail_path = new_str + img.thumbnail_path[len(old_str):]
+        ds.folder_path = new_str
+
+    ds.name = new_name
+    if new_description is not None:
+        ds.description = new_description
     await db.commit()
     await db.refresh(ds)
     return ds

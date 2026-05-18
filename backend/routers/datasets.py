@@ -16,6 +16,7 @@ from backend.services.dataset_service import (
     get_tag_cooccurrence,
     import_images_from_folder,
     refresh_stats,
+    rename_dataset,
 )
 from backend.workers.job_queue import job_queue
 
@@ -78,8 +79,13 @@ async def update_dataset(dataset_id: str, body: DatasetUpdate, db: AsyncSession 
     ds = await db.get(Dataset, dataset_id)
     if not ds:
         raise HTTPException(404, "Dataset not found")
-    if body.name is not None:
-        ds.name = body.name
+
+    if body.name is not None and body.name != ds.name:
+        conflict = await db.execute(select(Dataset).where(Dataset.name == body.name))
+        if conflict.scalar():
+            raise HTTPException(400, f"Dataset '{body.name}' already exists")
+        return await rename_dataset(db, ds, body.name, body.description)
+
     if body.description is not None:
         ds.description = body.description
     await db.commit()
