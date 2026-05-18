@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { usePaneDatasetId } from "../hooks/usePaneDatasetId";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { qualityApi } from "../api/quality";
@@ -18,7 +18,7 @@ const SCORING_OPTIONS = [
 ];
 
 export default function QualityPage() {
-  const { datasetId } = useParams<{ datasetId: string }>();
+  const datasetId = usePaneDatasetId();
   const qc = useQueryClient();
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [runAesthetic, setRunAesthetic] = useState(true);

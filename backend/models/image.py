@@ -46,6 +46,9 @@ class Image(Base):
     dino_layer_scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     quality_flags: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
 
+    # AI generation metadata (PNG text chunks from SD/ComfyUI/Flux)
+    generation_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
     # Caption / tags
     caption_text: Mapped[str] = mapped_column(Text, default="")
     caption_style: Mapped[str] = mapped_column(String(32), default="")

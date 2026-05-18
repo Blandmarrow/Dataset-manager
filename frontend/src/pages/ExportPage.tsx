@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { usePaneDatasetId } from "../hooks/usePaneDatasetId";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { exportApi } from "../api/export";
@@ -25,7 +25,7 @@ const FLAG_OPTIONS = [
 ];
 
 export default function ExportPage() {
-  const { datasetId } = useParams<{ datasetId: string }>();
+  const datasetId = usePaneDatasetId();
   const [format, setFormat] = useState<Format>("kohya");
   const [captionFmt, setCaptionFmt] = useState<CaptionFmt>("txt");
   const [outputDir, setOutputDir] = useState("");

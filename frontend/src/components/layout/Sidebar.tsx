@@ -46,6 +46,12 @@ const IcoExport = () => (
     <path d="M8 2v8M5 7l3 3 3-3M2.5 13.5h11"/>
   </svg>
 );
+const IcoFileBrowser = () => (
+  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
+    <path d="M2.5 4.5h4l1.5 1.5h5.5v8h-11v-9.5z"/>
+    <path d="M2.5 7h11"/>
+  </svg>
+);
 const IcoGpu = () => (
   <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4">
     <rect x="2.5" y="3.5" width="11" height="9" rx="1"/>
@@ -159,6 +165,7 @@ export default function Sidebar() {
       <nav style={{ padding: "10px 8px 10px 10px", display: "flex", flexDirection: "column", gap: 1, flex: 1, overflowY: "auto" }}>
         <NavItem to="/datasets" icon={<IcoDatasets />} label="Datasets" />
         <NavItem to="/booru" icon={<IcoBooru />} label="Booru Browser" />
+        <NavItem to="/file-browser" icon={<IcoFileBrowser />} label="File Browser" />
 
         {datasetId && (
           <>

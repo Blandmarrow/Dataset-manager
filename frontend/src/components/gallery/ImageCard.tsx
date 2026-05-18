@@ -1,7 +1,9 @@
-import { useNavigate, useParams } from "react-router-dom";
+import { Cpu } from "lucide-react";
 import type { ImageListItem } from "../../types";
 import { imagesApi } from "../../api/images";
 import { useSelectionStore } from "../../store/selectionStore";
+import { usePaneDatasetId } from "../../hooks/usePaneDatasetId";
+import { usePaneNavigate } from "../../hooks/usePaneNavigate";
 
 function scoreClass(score: number | null) {
   if (score === null) return "";
@@ -10,11 +12,14 @@ function scoreClass(score: number | null) {
   return "bad";
 }
 
-interface Props { image: ImageListItem; }
+interface Props {
+  image: ImageListItem;
+  onShowGenMeta?: (image: ImageListItem) => void;
+}
 
-export default function ImageCard({ image }: Props) {
-  const navigate = useNavigate();
-  const { datasetId } = useParams();
+export default function ImageCard({ image, onShowGenMeta }: Props) {
+  const datasetId = usePaneDatasetId();
+  const { go } = usePaneNavigate();
   const { toggle, isSelected } = useSelectionStore();
   const selected = isSelected(image.id);
   const isDuplicate = image.quality_flags?.is_duplicate as boolean | undefined;
@@ -36,7 +41,7 @@ export default function ImageCard({ image }: Props) {
         transition: "border-color .12s",
         position: "relative",
       }}
-      onClick={() => navigate(`/datasets/${datasetId}/image/${image.id}`)}
+      onClick={() => go(`/datasets/${datasetId}/image/${image.id}`, { page: "image-detail", datasetId, imageId: image.id })}
       onMouseEnter={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.borderColor = "var(--line-2)"; }}
       onMouseLeave={(e) => { if (!selected) (e.currentTarget as HTMLElement).style.borderColor = "var(--line)"; }}
     >
@@ -112,8 +117,20 @@ export default function ImageCard({ image }: Props) {
 
       {/* Footer */}
       <div style={{ padding: "8px 10px", display: "flex", flexDirection: "column", gap: 2 }}>
-        <div style={{ fontSize: 11.5, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }} title={image.filename}>
-          {image.filename}
+        <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <div style={{ fontSize: 11.5, color: "var(--fg)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", flex: 1 }} title={image.filename}>
+            {image.filename}
+          </div>
+          {image.generation_metadata && onShowGenMeta && (
+            <button
+              className="icon-btn"
+              title="View generation info"
+              style={{ width: 18, height: 18, flexShrink: 0, color: "var(--accent)" }}
+              onClick={(e) => { e.stopPropagation(); onShowGenMeta(image); }}
+            >
+              <Cpu size={11} />
+            </button>
+          )}
         </div>
         {image.width && image.height && (
           <div style={{ fontSize: 10.5, color: "var(--fg-dim)", fontFamily: "Geist Mono, monospace" }}>{image.width}×{image.height}</div>

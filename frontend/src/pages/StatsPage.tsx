@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
-import { useParams, Link } from "react-router-dom";
+import { Link } from "react-router-dom";
+import { usePaneDatasetId } from "../hooks/usePaneDatasetId";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ImageListItem } from "../types";
 import { datasetsApi } from "../api/datasets";
@@ -676,7 +677,7 @@ function HistPanel({ title, subtitle, entries, onBarClick, rawValues, defaultEdg
 
 // ─── StatsPage ────────────────────────────────────────────────────────────────
 export default function StatsPage() {
-  const { datasetId } = useParams<{ datasetId: string }>();
+  const datasetId = usePaneDatasetId();
   const [panelFilter, setPanelFilter] = useState<PanelFilter>(null);
 
   const { data: stats, isLoading } = useQuery({

@@ -24,6 +24,7 @@ from backend.services.dataset_service import refresh_stats
 from backend.services.image_service import (
     crop_image,
     crop_to_aspect,
+    extract_generation_metadata,
     generate_thumbnail,
     get_image_info,
     resize_image,
@@ -169,6 +170,7 @@ async def upload_images(
             shutil.copyfileobj(upload.file, f)
 
         info = get_image_info(str(dest))
+        gen_meta = extract_generation_metadata(str(dest))
         thumb_path = str(dest_thumbs / (dest.stem + ".webp"))
         await asyncio.get_event_loop().run_in_executor(None, generate_thumbnail, str(dest), thumb_path)
 
@@ -178,6 +180,7 @@ async def upload_images(
             original_filename=upload.filename or filename,
             file_path=str(dest),
             thumbnail_path=thumb_path,
+            generation_metadata=gen_meta,
             **info,
         )
         db.add(img)
@@ -193,6 +196,13 @@ async def get_image(image_id: str, db: AsyncSession = Depends(get_db)):
     img = await db.get(Image, image_id)
     if not img:
         raise HTTPException(404, "Image not found")
+    if img.generation_metadata is None and img.file_path and Path(img.file_path).exists():
+        gen_meta = await asyncio.get_event_loop().run_in_executor(
+            None, extract_generation_metadata, img.file_path
+        )
+        if gen_meta:
+            img.generation_metadata = gen_meta
+            await db.commit()
     return img
 
 

@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { useEffect } from "react";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "react-hot-toast";
 
@@ -12,6 +13,10 @@ import QualityPage from "./pages/QualityPage";
 import StatsPage from "./pages/StatsPage";
 import ExportPage from "./pages/ExportPage";
 import BooruPage from "./pages/BooruPage";
+import FileBrowserPage from "./pages/FileBrowserPage";
+import PaneContainer from "./components/pane/PaneContainer";
+import { usePaneStore } from "./stores/paneStore";
+import type { PaneView, PageType } from "./contexts/PaneContext";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -19,27 +24,67 @@ const queryClient = new QueryClient({
   },
 });
 
+function routeToView(pathname: string): PaneView {
+  const dsImageMatch = pathname.match(/^\/datasets\/([^/]+)\/image\/([^/]+)/);
+  if (dsImageMatch) return { page: "image-detail", datasetId: dsImageMatch[1], imageId: dsImageMatch[2] };
+  const dsPageMatch = pathname.match(/^\/datasets\/([^/]+)\/([^/]+)/);
+  if (dsPageMatch) {
+    const seg = dsPageMatch[2] as PageType;
+    return { page: seg as PageType, datasetId: dsPageMatch[1] };
+  }
+  if (pathname.startsWith("/booru")) return { page: "booru" };
+  if (pathname.startsWith("/file-browser")) return { page: "file-browser" };
+  return { page: "datasets" };
+}
+
+function RouteSyncer() {
+  const location = useLocation();
+  const { enabled, syncFromRoute } = usePaneStore();
+  useEffect(() => {
+    if (enabled) syncFromRoute(routeToView(location.pathname));
+  }, [location.pathname, enabled, syncFromRoute]);
+  return null;
+}
+
+function MainContent() {
+  const { enabled, layout } = usePaneStore();
+
+  if (enabled) {
+    return (
+      <div style={{ flex: 1, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+        <PaneContainer node={layout} isOnly={layout.type === "leaf"} />
+      </div>
+    );
+  }
+
+  return (
+    <main style={{ flex: 1, overflowY: "auto" }}>
+      <Routes>
+        <Route path="/" element={<Navigate to="/datasets" replace />} />
+        <Route path="/datasets" element={<DatasetsPage />} />
+        <Route path="/booru" element={<BooruPage />} />
+        <Route path="/datasets/:datasetId/gallery" element={<GalleryPage />} />
+        <Route path="/datasets/:datasetId/image/:imageId" element={<ImageDetailPage />} />
+        <Route path="/datasets/:datasetId/captioning" element={<CaptioningPage />} />
+        <Route path="/datasets/:datasetId/quality" element={<QualityPage />} />
+        <Route path="/datasets/:datasetId/stats" element={<StatsPage />} />
+        <Route path="/datasets/:datasetId/export" element={<ExportPage />} />
+        <Route path="/file-browser" element={<FileBrowserPage />} />
+      </Routes>
+    </main>
+  );
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <RouteSyncer />
         <div style={{ display: "grid", gridTemplateColumns: "240px 1fr", height: "100vh", overflow: "hidden" }}>
           <Sidebar />
           <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
             <TopBar />
-            <main style={{ flex: 1, overflowY: "auto" }}>
-              <Routes>
-                <Route path="/" element={<Navigate to="/datasets" replace />} />
-                <Route path="/datasets" element={<DatasetsPage />} />
-                <Route path="/booru" element={<BooruPage />} />
-                <Route path="/datasets/:datasetId/gallery" element={<GalleryPage />} />
-                <Route path="/datasets/:datasetId/image/:imageId" element={<ImageDetailPage />} />
-                <Route path="/datasets/:datasetId/captioning" element={<CaptioningPage />} />
-                <Route path="/datasets/:datasetId/quality" element={<QualityPage />} />
-                <Route path="/datasets/:datasetId/stats" element={<StatsPage />} />
-                <Route path="/datasets/:datasetId/export" element={<ExportPage />} />
-              </Routes>
-            </main>
+            <MainContent />
           </div>
         </div>
         <Toaster

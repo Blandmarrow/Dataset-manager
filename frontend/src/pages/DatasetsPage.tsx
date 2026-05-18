@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from "react";
-import { useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { usePaneNavigate } from "../hooks/usePaneNavigate";
 import toast from "react-hot-toast";
 import { datasetsApi } from "../api/datasets";
 import { imagesApi } from "../api/images";
@@ -32,7 +32,7 @@ function tileGrad(dsIndex: number, k: number) {
 }
 
 export default function DatasetsPage() {
-  const navigate = useNavigate();
+  const { go } = usePaneNavigate();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -200,7 +200,7 @@ export default function DatasetsPage() {
                 cursor: "pointer", display: "flex", flexDirection: "column",
                 position: "relative", transition: "border-color .15s",
               }}
-              onClick={() => navigate(`/datasets/${ds.id}/gallery`)}
+              onClick={() => go(`/datasets/${ds.id}/gallery`, { page: "gallery", datasetId: ds.id })}
               onMouseEnter={(e) => { if (dragOverId !== ds.id) (e.currentTarget as HTMLElement).style.borderColor = "var(--line-2)"; }}
               onMouseLeave={(e) => { if (dragOverId !== ds.id) (e.currentTarget as HTMLElement).style.borderColor = "var(--line)"; }}
               className="ds-card-wrapper"

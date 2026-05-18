@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { usePaneDatasetId, usePaneImageId } from "../hooks/usePaneDatasetId";
+import { usePaneNavigate } from "../hooks/usePaneNavigate";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ChevronLeft, ChevronRight, Save, Crop, AlertTriangle, Copy, Sparkles, ChevronDown, ChevronUp, Type } from "lucide-react";
 import Cropper from "react-easy-crop";
@@ -8,9 +9,9 @@ import { imagesApi } from "../api/images";
 import { captionsApi } from "../api/captions";
 import { captioningApi } from "../api/captioning";
 import { useJobStore } from "../store/jobStore";
-import TagEditor from "../components/caption/TagEditor";
 import PromptPresetManager from "../components/caption/PromptPresetManager";
 import ResolutionPicker from "../components/caption/ResolutionPicker";
+import GenerationMetadata from "../components/image/GenerationMetadata";
 import type { ModelInfo, OllamaModel } from "../types";
 
 function formatSize(bytes: number | null) {
@@ -94,8 +95,9 @@ function DinoLayerBreakdown({ scores }: { scores: Record<string, number> }) {
 }
 
 export default function ImageDetailPage() {
-  const { datasetId, imageId } = useParams<{ datasetId: string; imageId: string }>();
-  const navigate = useNavigate();
+  const datasetId = usePaneDatasetId();
+  const imageId = usePaneImageId();
+  const { go: paneGo, back: paneBack } = usePaneNavigate();
   const qc = useQueryClient();
 
   const [tags, setTags] = useState<string[]>([]);
@@ -195,8 +197,8 @@ export default function ImageDetailPage() {
         } catch {}
       }
     }
-    navigate(`/datasets/${datasetId}/image/${id}`, { replace: true });
-  }, [navCtx, datasetId, atEnd, atStart, nextId, prevId, nextPageData, prevPageData, navigate]);
+    paneGo(`/datasets/${datasetId}/image/${id}`, { page: "image-detail", datasetId: datasetId ?? "", imageId: id }, { replace: true });
+  }, [navCtx, datasetId, atEnd, atStart, nextId, prevId, nextPageData, prevPageData, paneGo]);
 
   // Arrow-key navigation — skip when focus is inside a text field
   useEffect(() => {
@@ -331,7 +333,7 @@ export default function ImageDetailPage() {
       {/* Left: image */}
       <div className="flex-1 flex flex-col min-w-0">
         <div className="p-3 border-b border-gray-700/50 flex items-center gap-3">
-          <button className="btn-ghost btn-sm flex items-center gap-1.5" onClick={() => navigate(-1)}>
+          <button className="btn-ghost btn-sm flex items-center gap-1.5" onClick={() => paneBack({ page: "gallery", datasetId: datasetId ?? "" })}>
             <ArrowLeft size={14} /> Back
           </button>
 
@@ -481,19 +483,16 @@ export default function ImageDetailPage() {
               {hasWatermark === true && <span className="badge-blue flex items-center gap-1"><Type size={10} />Watermark</span>}
             </div>
           )}
+
+          {/* AI generation metadata */}
+          {image.generation_metadata && (
+            <GenerationMetadata metadata={image.generation_metadata} />
+          )}
         </div>
 
         {/* Caption */}
         <div className="p-4 flex-1 space-y-3">
           <h3 className="font-medium text-sm text-gray-300 uppercase tracking-wide">Caption</h3>
-
-          <div>
-            <label className="label">Tags</label>
-            <TagEditor
-              tags={tags}
-              onChange={(t) => { setTags(t); setCaptionDirty(true); }}
-            />
-          </div>
 
           <div>
             <label className="label">Caption Text</label>
@@ -506,18 +505,6 @@ export default function ImageDetailPage() {
               placeholder="Natural language description..."
             />
           </div>
-
-          <select
-            className="input"
-            value={captionStyle}
-            onChange={(e) => { setCaptionStyle(e.target.value); setCaptionDirty(true); }}
-          >
-            <option value="">— style —</option>
-            <option value="tags">Tags</option>
-            <option value="natural">Natural language</option>
-            <option value="descriptive">Descriptive</option>
-            <option value="booru">Booru style</option>
-          </select>
 
           <button
             className="btn-primary w-full flex items-center justify-center gap-2"

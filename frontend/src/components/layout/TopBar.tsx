@@ -5,6 +5,8 @@ import { datasetsApi } from "../../api/datasets";
 import { useJobStore } from "../../store/jobStore";
 import { useAllJobsSSE } from "../../hooks/useSSE";
 import ConfirmDialog from "../common/ConfirmDialog";
+import { usePaneStore } from "../../stores/paneStore";
+import { Columns2 } from "lucide-react";
 
 const PAGE_LABELS: Record<string, string> = {
   gallery: "Gallery",
@@ -70,6 +72,7 @@ export default function TopBar() {
   const active = runningJobs[0];
   const [showConfirm, setShowConfirm] = useState(false);
   const [shuttingDown, setShuttingDown] = useState(false);
+  const { enabled: paneEnabled, toggleEnabled: togglePane } = usePaneStore();
 
   async function handleShutdown() {
     setShowConfirm(false);
@@ -103,6 +106,17 @@ export default function TopBar() {
         {runningJobs.length > 1 && (
           <span className="badge solid mono">{runningJobs.length} jobs</span>
         )}
+
+        {/* Split view toggle */}
+        <button
+          className="icon-btn"
+          title={paneEnabled ? "Exit split view" : "Enter split view"}
+          type="button"
+          onClick={togglePane}
+          style={{ color: paneEnabled ? "var(--accent)" : undefined }}
+        >
+          <Columns2 size={15} />
+        </button>
 
         {/* Notification bell — UI only */}
         <button className="icon-btn" title="Notifications" type="button">

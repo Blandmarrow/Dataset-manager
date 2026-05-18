@@ -24,6 +24,7 @@ class ImageOut(BaseModel):
     style_similarity_score: float | None = None
     dino_layer_scores: dict | None = None
     quality_flags: dict[str, Any]
+    generation_metadata: dict | None = None
     caption_text: str
     caption_style: str
     captioned_by: str
@@ -50,6 +51,7 @@ class ImageListItem(BaseModel):
     style_similarity_score: float | None = None
     dino_layer_scores: dict | None = None
     quality_flags: dict[str, Any]
+    generation_metadata: dict | None = None
     caption_text: str
     tags_json: list[str]
     captioned_by: str

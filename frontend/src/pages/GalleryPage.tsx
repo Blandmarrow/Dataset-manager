@@ -1,8 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { usePaneDatasetId } from "../hooks/usePaneDatasetId";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { imagesApi } from "../api/images";
+import type { ImageListItem } from "../types";
+import GenerationMetadata from "../components/image/GenerationMetadata";
 import { datasetsApi } from "../api/datasets";
 import ImageCard from "../components/gallery/ImageCard";
 import SelectionToolbar from "../components/gallery/SelectionToolbar";
@@ -50,7 +52,7 @@ function loadSavedState(datasetId: string) {
 }
 
 export default function GalleryPage() {
-  const { datasetId } = useParams<{ datasetId: string }>();
+  const datasetId = usePaneDatasetId();
   const qc = useQueryClient();
   const { selectAll, clear, count } = useSelectionStore();
 
@@ -70,6 +72,7 @@ export default function GalleryPage() {
   const [draftMax, setDraftMax] = useState("");
   const [uploading, setUploading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [genMetaImage, setGenMetaImage] = useState<ImageListItem | null>(null);
 
   const sortOpt = SORT_OPTIONS[sortIdx];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -390,7 +393,13 @@ export default function GalleryPage() {
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 12 }}>
-            {images.map((img) => <ImageCard key={img.id} image={img} />)}
+            {images.map((img) => (
+              <ImageCard
+                key={img.id}
+                image={img}
+                onShowGenMeta={img.generation_metadata ? setGenMetaImage : undefined}
+              />
+            ))}
           </div>
         )}
 
@@ -407,6 +416,41 @@ export default function GalleryPage() {
         <SelectionToolbar datasetId={datasetId!} />
         </div>
       </div>
+
+      {/* Generation metadata modal */}
+      {genMetaImage?.generation_metadata && (
+        <div
+          style={{
+            position: "fixed", inset: 0, zIndex: 50,
+            background: "rgba(0,0,0,.6)", backdropFilter: "blur(4px)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}
+          onClick={() => setGenMetaImage(null)}
+        >
+          <div
+            style={{
+              background: "var(--surface-1)", border: "1px solid var(--line)",
+              borderRadius: "var(--r-lg)", padding: "16px 20px",
+              width: 480, maxWidth: "90vw", maxHeight: "80vh", overflowY: "auto",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: "var(--fg)" }}>
+                {genMetaImage.filename}
+              </span>
+              <button
+                className="icon-btn"
+                style={{ width: 24, height: 24 }}
+                onClick={() => setGenMetaImage(null)}
+              >
+                ×
+              </button>
+            </div>
+            <GenerationMetadata metadata={genMetaImage.generation_metadata} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

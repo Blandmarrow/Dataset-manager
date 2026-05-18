@@ -115,7 +115,7 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 ### Frontend state
 
 - **TanStack Query** — all server state (datasets, images, captions, jobs). Query keys follow `["resource", id]` pattern.
-- **Zustand stores** — `datasetStore` (active dataset), `selectionStore` (Set of selected image IDs), `jobStore` (Map of active job progress from SSE), `promptPresetsStore` (saved AI prompt presets, persisted to localStorage).
+- **Zustand stores** — `datasetStore` (active dataset), `selectionStore` (Set of selected image IDs), `jobStore` (Map of active job progress from SSE), `promptPresetsStore` (saved AI prompt presets, persisted to localStorage), `paneStore` (split-view pane layout — see Split view pane manager section).
 - **`useJobSSE(jobId)`** — opens `EventSource` for one job, writes progress to `jobStore`.
 - **`useAllJobsSSE()`** — opened at app root in `TopBar`, drives the global progress bar.
 - **Job completion → cache invalidation**: pages that trigger background jobs (`QualityPage`, `SelectionToolbar`, `ImageDetailPage`) watch their job ID in `jobStore` via `useEffect` and call `qc.invalidateQueries` when status becomes `"completed"`. Always follow this pattern when adding new job-triggering UI.
@@ -128,6 +128,10 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 ### Layout
 
 **Sidebar** uses `useMatch("/datasets/:datasetId/*")` (not `useParams`) to detect the active dataset, because the Sidebar renders outside the `<Routes>` tree and `useParams` would always return `{}` there.
+
+### Gallery generation metadata
+
+`generation_metadata` is included in both `ImageOut` and `ImageListItem` backend schemas, so it comes back with the gallery list response. `ImageCard` shows a small accent `<Cpu>` icon button in the filename row when `image.generation_metadata` is set; clicking it (without navigating) opens a page-level modal in `GalleryPage` that renders `<GenerationMetadata>`. The same component appears in the right panel of `ImageDetailPage`, expanded by default.
 
 ### Gallery filters
 
@@ -151,6 +155,8 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 
 **Caption textarea auto-expand**: The caption text `<textarea>` in `ImageDetailPage` uses a `captionRef` + `useEffect` pattern to auto-size: on every `captionText` change it sets `height = "auto"` then `height = scrollHeight`. `minHeight: 8rem` keeps a reasonable baseline for short captions; `resize-none overflow-hidden` prevent manual resize handles.
 
+**ImageDetailPage caption panel**: Contains only the caption text textarea and Save button (plus the collapsible AI Generate section). The `tags` and `caption_style` fields are still present in the DB schema, backend save endpoint (`PATCH /captions/{id}`), and save mutation — they are read from `captionData` and re-persisted unchanged — but neither a tag editor nor a style picker is exposed in the UI.
+
 ### Datasets page
 
 `DatasetsPage` uses `queryKey: ["datasets"]` with `staleTime: 0` so the list is always refetched on mount.
@@ -158,6 +164,8 @@ SQLite in WAL mode (`synchronous=NORMAL`). ORM models live in `backend/models/`.
 **Preview strip**: `GET /datasets/` (`DatasetOut`) includes `preview_image_ids: list[str]` — up to 8 image IDs fetched in a single batch query alongside the datasets list. The card renders these as `<img src="/api/v1/images/{id}/thumbnail">` tiles. When a dataset has no images the strip falls back to deterministic colour gradients.
 
 **Import job tracking**: after starting an import (`POST /datasets/{id}/import`) `DatasetsPage` stores the returned `job_id` and watches it in `jobStore` via `useEffect`. The `["datasets"]` query is invalidated only when the job status becomes `"completed"` — not when the job is created — so image counts update after the import actually finishes.
+
+**Card navigation**: Dataset card clicks use `usePaneNavigate().go(url, view)` (not raw `useNavigate`) so that clicking a dataset inside a split pane updates that pane's view rather than the URL. Do not revert to `useNavigate` here.
 
 **Drag-and-drop upload**: `GalleryPage` supports dropping image files onto the grid (`onDragEnter`/`onDragLeave`/`onDrop` on the scroll container wrapper) — this works. `DatasetsPage` has the plumbing in place (native `dragover`/`drop` listeners via `useEffect` on `pageRef`, `data-dataset-id` attributes on cards, `dragOverId` state for the overlay) but the drop does not trigger uploads reliably — **TODO: debug and fix**. Approaches already tried without success: React synthetic `onDragEnter`+`onDragLeave`, `onDragOver`-based debounce timer, native `addEventListener` on the page container with `elementFromPoint`.
 
@@ -283,3 +291,82 @@ output_dir/
   captions.jsonl ← {"file": "name.png", "caption": "...", "tags": [...]} per line
   tags.csv       ← file,tag rows (one row per tag per image)
 ```
+
+### AI generation metadata
+
+Extracted at import time and on direct upload via `extract_generation_metadata(path)` in `backend/services/image_service.py`. Stored in `Image.generation_metadata` (JSON column, nullable). Included in both `ImageOut` and `ImageListItem` schemas.
+
+Supported formats:
+
+| PNG chunk key | Tool | Parser |
+|---|---|---|
+| `parameters` | AUTOMATIC1111 / SD WebUI | `_parse_a1111_params()` — splits on `Negative prompt:` (case-insensitive, handles `\r\n`); extracts steps/cfg_scale/seed/sampler/sampler_name/model/model_hash/size/vae from trailing key-value line |
+| `workflow` / `prompt` | ComfyUI | Stores raw workflow JSON; extracts text from `CLIPTextEncode`/`CLIPTextEncodeSDXL` nodes as prompt |
+| `Comment` | Generic | Stored as `raw`; JSON-parsed if valid |
+| EXIF tag 37510 (UserComment) | Various | Parsed as A1111 format if `Steps:` present, otherwise stored as `raw` |
+
+**Parser invariant**: `prompt` is only stored when non-empty. An image generated with no positive prompt results in a dict with `negative_prompt` but no `prompt` key — this is correct, not a bug.
+
+Frontend: `components/image/GenerationMetadata.tsx` — collapsible section titled **GENERATION METADATA** (default expanded) with source badge, prompt + copy button, negative prompt, param grid (model/sampler/steps/CFG/seed/size/VAE), and optional ComfyUI raw workflow viewer.
+
+**Lazy backfill**: `GET /images/{image_id}` checks if `generation_metadata` is NULL on the loaded image; if so, it calls `extract_generation_metadata` on the file and commits the result before returning. This transparently populates metadata for images imported before this feature was added, with no user action required.
+
+**A1111 parser — no-negative-prompt case**: `_parse_a1111_params()` handles images with no `Negative prompt:` line by searching for `Steps:` within the prompt block itself, splitting the prompt from the param line before extracting structured fields. Without this fix, Steps/Sampler/Seed/Model etc. would not be extracted for such images.
+
+### File browser
+
+Router: `backend/routers/filesystem.py`, prefix `/api/v1/filesystem`, registered in `main.py`.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /roots` | Windows drive roots (`C:\`, `D:\`, …) |
+| `GET /list?path=` | Directory listing — dirs first, then files, both alphabetical; `is_image` flag for image extensions |
+| `GET /preview?path=` | Serve image file directly (`FileResponse`) |
+| `GET /image-meta?path=` | `{width, height, format, file_size_bytes, generation_metadata}` — reads file without touching DB |
+| `POST /move` | Move file/dir; syncs `Image.file_path`, `Image.filename`, `Image.dataset_id` when path is inside a dataset folder |
+| `POST /rename` | Rename in place; same DB sync |
+| `POST /delete` | Delete file or directory (recursive); deletes `Image` DB records first |
+| `POST /mkdir` | Create directory |
+
+**DB sync**: `_find_dataset_for_path(path, session)` checks if `path` is inside any dataset's `folder_path` and returns the dataset. Move/rename/delete use this to keep `Image` records consistent without a separate import step.
+
+**Path safety**: `_sanitize_path()` rejects null bytes and requires an absolute path. No further sandbox — this is a local desktop app with intentional full-filesystem access.
+
+Frontend page: `FileBrowserPage.tsx`, route `/file-browser`, sidebar nav item "File Browser". Three-panel layout (`200px | 1fr | 280px`): left = drive roots + quick-access links, middle = breadcrumb + file list + context menu (rename/delete/import), right = image preview + `<GenerationMetadata>` panel.
+
+API client: `frontend/src/api/filesystem.ts` — thin wrappers over all endpoints; `previewUrl(path)` returns a URL string for use in `<img src>`.
+
+### Split view pane manager
+
+Allows the main content area to be split into any number of nested panes, each independently showing any page with its own dataset selection.
+
+**Data model** (`frontend/src/stores/paneStore.ts`):
+
+```
+PaneLeaf  { type: "leaf"; id: string; view: PaneView }
+PaneSplit { type: "split"; id: string; direction: "horizontal"|"vertical";
+            sizes: [number, number]; children: [PaneTree, PaneTree] }
+PaneView  { page: PageType; datasetId?: string; imageId?: string }
+```
+
+All tree mutations (`splitNode`, `closeNode`, `updateLeafView`, `updateSplitSizes`, `updateFirstLeaf`) are pure functions — the store holds a single immutable `layout: PaneTree` root. `syncFromRoute(view)` updates only the first leaf (left-to-top traversal) when URL navigation occurs, preserving all other panes.
+
+**Context & hooks** (`frontend/src/contexts/PaneContext.tsx`, `frontend/src/hooks/`):
+
+| Hook | Purpose |
+|---|---|
+| `usePaneDatasetId()` | Returns `ctx?.view.datasetId ?? useParams().datasetId` — works both inside and outside pane mode |
+| `usePaneImageId()` | Same pattern for `imageId` |
+| `usePaneNavigate()` | Returns `{ go(url, view), back(fallbackView) }`. **Inside a pane**: calls `paneStore.setView(paneId, view)`. **Outside**: calls `navigate(url)`. All intra-app navigation that may occur inside a pane MUST use this hook; raw `navigate()` calls change the URL and trigger `RouteSyncer` which only updates pane 1. |
+
+**Components** (`frontend/src/components/pane/`):
+
+- `PaneContainer` — recursive renderer; splits use `react-resizable-panels` `Group`/`Panel`/`Separator` with `orientation` prop. Installed version exports `Group`, `Panel`, `Separator` — NOT `PanelGroup`/`PanelResizeHandle`. `onLayoutChanged` receives `{ [panelId]: number }` keyed by `id` prop on each `<Panel>`. The leaf content wrapper is `display: flex; flexDirection: column` so that pages whose root div uses `flex: 1, overflowY: "auto"` (StatsPage, QualityPage, CaptioningPage, ExportPage, DatasetsPage) correctly fill the pane height and show a scrollbar. Pages that use `height: "100%"` instead (GalleryPage, FileBrowserPage) also work because `height: 100%` resolves against the flex container's definite height.
+- `PaneHeader` — 32 px header per pane: page-type `<select>`, dataset `<select>` (for pages in `NEEDS_DATASET`), split-H / split-V / close buttons.
+- `PageRenderer` — switch over `view.page` → imports and renders the matching page component.
+
+**App integration** (`frontend/src/App.tsx`):
+
+- `MainContent` renders `<PaneContainer node={layout}>` when `paneStore.enabled`, otherwise the normal `<Routes>` tree.
+- `RouteSyncer` (child of `BrowserRouter`) uses `useEffect` on `location.pathname` to call `syncFromRoute()` when pane mode is active — keeps the primary pane in sync with sidebar/URL navigation.
+- Toggle: `<Columns2>` icon button in `TopBar` calls `paneStore.toggleEnabled()`.

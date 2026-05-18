@@ -62,9 +62,26 @@ export interface ImageListItem {
   style_similarity_score: number | null;
   dino_layer_scores: Record<string, number> | null;
   quality_flags: Record<string, unknown>;
+  generation_metadata?: GenerationMetadata | null;
   caption_text: string;
   tags_json: string[];
   captioned_by: string;
+}
+
+export interface GenerationMetadata {
+  source?: string;
+  prompt?: string;
+  negative_prompt?: string;
+  seed?: number;
+  steps?: number;
+  cfg_scale?: number;
+  sampler?: string;
+  model?: string;
+  model_hash?: string;
+  size?: string;
+  vae?: string;
+  raw?: string;
+  comfyui_workflow?: Record<string, unknown>;
 }
 
 export interface ImageDetail extends ImageListItem {
@@ -74,6 +91,7 @@ export interface ImageDetail extends ImageListItem {
   caption_style: string;
   captioned_at: string | null;
   created_at: string;
+  generation_metadata?: GenerationMetadata | null;
 }
 
 export interface CaptionData {

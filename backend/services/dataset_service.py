@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import Dataset, Image, Tag
-from backend.services.image_service import generate_thumbnail, get_image_info
+from backend.services.image_service import extract_generation_metadata, generate_thumbnail, get_image_info
 
 SUPPORTED_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tiff", ".tif"}
 
@@ -99,6 +99,7 @@ async def import_images_from_folder(
             shutil.copy2(src_file, dest_file)
 
             info = get_image_info(str(dest_file))
+            gen_meta = extract_generation_metadata(str(dest_file))
             thumb_path = str(dest_thumbs / (dest_file.stem + ".webp"))
             await asyncio.get_event_loop().run_in_executor(
                 None, generate_thumbnail, str(dest_file), thumb_path
@@ -110,6 +111,7 @@ async def import_images_from_folder(
                 original_filename=src_file.name,
                 file_path=str(dest_file),
                 thumbnail_path=thumb_path,
+                generation_metadata=gen_meta,
                 **info,
             )
             db.add(img)

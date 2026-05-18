@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useParams } from "react-router-dom";
+import { usePaneDatasetId } from "../hooks/usePaneDatasetId";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import toast from "react-hot-toast";
 import { captioningApi } from "../api/captioning";
@@ -21,7 +21,7 @@ const STYLE_LABELS: Record<string, string[]> = {
 type Scope = "uncaptioned" | "selected" | "all";
 
 export default function CaptioningPage() {
-  const { datasetId } = useParams<{ datasetId: string }>();
+  const datasetId = usePaneDatasetId();
   const qc = useQueryClient();
   const { selectedIds, count: selCount } = useSelectionStore();
   const { presets, save: savePreset, remove: removePreset } = usePresetsStore();

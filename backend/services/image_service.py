@@ -1,4 +1,6 @@
 import io
+import json
+import re
 import shutil
 from pathlib import Path
 
@@ -22,6 +24,150 @@ def _open_safe(path: str) -> Image.Image:
     if img.mode not in ("RGB", "RGBA"):
         img = img.convert("RGB")
     return img
+
+
+def _parse_a1111_params(text: str) -> dict:
+    """Parse Automatic1111 / AUTOMATIC1111 generation parameters string."""
+    result: dict = {"source": "a1111", "raw": text}
+
+    # Split on "Negative prompt:" — case-insensitive, handles \r\n, matches at
+    # start-of-string or after a newline so the separator itself is consumed.
+    neg_split = re.split(
+        r"(?:^|\r?\n)Negative prompt:\s*",
+        text,
+        maxsplit=1,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    prompt = neg_split[0].strip()
+    if prompt:
+        result["prompt"] = prompt
+
+    if len(neg_split) > 1:
+        remainder = neg_split[1]
+        # The negative prompt ends at the param line that starts with "Steps:"
+        param_line_match = re.search(r"\r?\nSteps:", remainder, re.IGNORECASE)
+        if param_line_match:
+            result["negative_prompt"] = remainder[: param_line_match.start()].strip()
+            param_text = remainder[param_line_match.start():]
+        else:
+            result["negative_prompt"] = remainder.strip()
+            param_text = ""
+    else:
+        # No negative prompt — the prompt part may contain a trailing param line
+        param_line_match = re.search(r"\r?\nSteps:", neg_split[0], re.IGNORECASE)
+        if param_line_match:
+            result["prompt"] = neg_split[0][: param_line_match.start()].strip()
+            param_text = neg_split[0][param_line_match.start():]
+        else:
+            param_text = ""
+
+    for match in re.finditer(r"([\w][\w\s]+?):\s*([^,\n]+)", param_text):
+        key = match.group(1).strip().lower().replace(" ", "_")
+        val = match.group(2).strip()
+        if key == "steps":
+            try:
+                result["steps"] = int(val)
+            except ValueError:
+                pass
+        elif key == "cfg_scale":
+            try:
+                result["cfg_scale"] = float(val)
+            except ValueError:
+                pass
+        elif key == "seed":
+            try:
+                result["seed"] = int(val)
+            except ValueError:
+                pass
+        elif key in ("sampler", "sampler_name"):
+            result["sampler"] = val
+        elif key == "model":
+            result["model"] = val
+        elif key == "model_hash":
+            result["model_hash"] = val
+        elif key == "size":
+            result["size"] = val
+        elif key == "vae":
+            result["vae"] = val
+
+    return result
+
+
+def _extract_comfyui_prompt(prompt_data: dict) -> str | None:
+    """Try to extract a human-readable prompt from ComfyUI prompt JSON."""
+    texts = []
+    for node in prompt_data.values():
+        cls = node.get("class_type", "")
+        inputs = node.get("inputs", {})
+        if cls in ("CLIPTextEncode", "CLIPTextEncodeSDXL") and "text" in inputs:
+            t = inputs["text"]
+            if isinstance(t, str) and t.strip():
+                texts.append(t.strip())
+    return "\n".join(texts) if texts else None
+
+
+def extract_generation_metadata(path: str) -> dict | None:
+    """Extract AI generation parameters from PNG text chunks or EXIF."""
+    try:
+        img = Image.open(path)
+    except Exception:
+        return None
+
+    info = getattr(img, "info", {}) or {}
+
+    # A1111 / sd-webui style
+    if "parameters" in info:
+        raw = info["parameters"]
+        if isinstance(raw, str) and raw.strip():
+            return _parse_a1111_params(raw)
+
+    # ComfyUI stores workflow JSON + prompt JSON
+    if "workflow" in info or "prompt" in info:
+        result: dict = {"source": "comfyui"}
+        if "workflow" in info:
+            try:
+                result["comfyui_workflow"] = json.loads(info["workflow"])
+            except Exception:
+                result["raw"] = info["workflow"]
+        if "prompt" in info:
+            try:
+                prompt_data = json.loads(info["prompt"])
+                extracted = _extract_comfyui_prompt(prompt_data)
+                if extracted:
+                    result["prompt"] = extracted
+            except Exception:
+                pass
+        return result if len(result) > 1 else None
+
+    # Generic "Comment" text chunk (used by some tools)
+    if "Comment" in info:
+        comment = info["Comment"]
+        if isinstance(comment, str) and comment.strip():
+            try:
+                parsed = json.loads(comment)
+                if isinstance(parsed, dict):
+                    return {"source": "unknown", "raw": comment, **parsed}
+            except Exception:
+                pass
+            return {"source": "unknown", "raw": comment}
+
+    # EXIF UserComment (tag 37510) — some tools write here
+    try:
+        exif = img._getexif() or {}
+        user_comment = exif.get(37510)
+        if user_comment:
+            if isinstance(user_comment, bytes):
+                # Strip EXIF ASCII/Unicode header prefix if present
+                user_comment = user_comment.decode("utf-8", errors="replace").lstrip("\x00")
+            if user_comment.strip():
+                if "Steps:" in user_comment:
+                    return _parse_a1111_params(user_comment)
+                return {"source": "unknown", "raw": user_comment.strip()}
+    except Exception:
+        pass
+
+    return None
 
 
 def get_image_info(path: str) -> dict:
