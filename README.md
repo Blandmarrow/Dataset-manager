@@ -206,6 +206,8 @@ GELBOORU_USER_ID=...
 
 Double-click **`Start Dataset Manager.bat`** in Explorer to launch the app. It opens on `http://localhost:8000` automatically.
 
+To update to the latest version, double-click **`Update Dataset Manager.bat`** — it pulls the latest code, updates dependencies, and rebuilds the frontend.
+
 To shut down, click the power icon in the top-right of the app and confirm, or press `Ctrl+C` in the terminal.
 
 ---
